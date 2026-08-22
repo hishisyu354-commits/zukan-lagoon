@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>図鑑ラグーン</title>
+<meta name="description" content="ダイビングサークルの共有魚図鑑。見つけた魚を写真とポイント付きで記録する。">
+<meta property="og:title" content="図鑑ラグーン">
+<meta property="og:description" content="ダイビングサークルの共有魚図鑑。見つけた魚を写真とポイント付きで記録する。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://hishisyu354-commits.github.io/zukan-lagoon/">
+<meta name="theme-color" content="#e6f4f6">
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%230e9c8f"/><path d="M14 32c7-8 15-12 24-12 8 0 14 5 19 12-5 7-11 12-19 12-9 0-17-4-24-12Z" fill="none" stroke="%23fff" stroke-width="4"/><circle cx="47" cy="29" r="2.5" fill="%23fff"/><path d="M14 32l-6-8v16l6-8Z" fill="%23fff"/></svg>'>
+<style>
+:root{
+  --bg:#e8f5f7; --surface:#ffffff; --surface2:#eef8f9; --line:#d2e8ec;
+  --text:#12404e; --dim:#54798a; --faint:#87a6b0; --navy:#12404e;
+  --aqua:#0e9c8f; --aqua-deep:#0b7f75; --gold:#e39c17; --warn:#d97a2b; --danger:#dd5242;
+  --r1:#8ba3ad; --r2:#3b93d1; --r3:#0e9c8f; --r4:#e39c17; --r5:#dd5242;
+  --shadow:0 1px 3px rgba(18,64,78,.08);
+  --sans:-apple-system,"Hiragino Sans","Hiragino Kaku Gothic ProN",system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+html{background:#e6f4f6}
+body{margin:0;color:var(--text);font-family:var(--sans);-webkit-font-smoothing:antialiased;
+  background:linear-gradient(180deg,#f6fcfd 0%,#e6f4f6 45%,#daeff2 100%)}
+body{max-width:960px;margin:0 auto;padding:0 14px calc(40px + env(safe-area-inset-bottom))}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit}
+
+/* header */
+.top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 2px 12px;border-bottom:1px solid var(--line)}
+.brand{font-weight:800;font-size:19px;letter-spacing:-.01em;color:var(--text)}
+.brand small{font:600 10px/1 var(--mono);color:var(--faint);letter-spacing:.14em;margin-left:8px}
+.topright{display:flex;align-items:center;gap:8px}
+.mode{font:600 10.5px/1 var(--mono);color:var(--dim);border:1px solid var(--line);border-radius:6px;padding:5px 8px;white-space:nowrap;background:var(--surface)}
+.mode.mock{color:var(--warn);border-color:#ecd9c4;background:#fdf6ec}
+.postbtn{font:700 13px var(--sans);color:#fff;background:var(--aqua);border:none;border-radius:9px;padding:9px 14px;cursor:pointer;box-shadow:var(--shadow)}
+.postbtn:active{background:var(--aqua-deep)}
+
+/* filters */
+.filters{position:sticky;top:0;z-index:5;background:linear-gradient(rgba(244,251,252,.97) 80%,rgba(244,251,252,0));padding:10px 0 8px;display:flex;flex-direction:column;gap:8px}
+.frow{display:flex;gap:8px}
+.search{flex:1;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:9px;color:var(--text);font-size:14px;padding:9px 12px;box-shadow:var(--shadow)}
+.search::placeholder{color:var(--faint)}
+.search:focus{outline:none;border-color:var(--aqua)}
+select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:9px;color:var(--text);font-size:13px;padding:9px 10px;appearance:none;box-shadow:var(--shadow)}
+.rchips{display:flex;gap:6px;flex-wrap:wrap}
+.rchip{font:600 12px var(--mono);color:var(--dim);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 11px;cursor:pointer}
+.rchip[aria-pressed="true"]{color:#fff;background:var(--navy);border-color:var(--navy)}
+.count{font:500 11px var(--mono);color:var(--faint);padding:2px 2px 0}
+
+/* card grid */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:10px;margin-top:8px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;display:flex;flex-direction:column;transition:border-color .12s,transform .12s;box-shadow:var(--shadow)}
+.card:hover{border-color:#a9d6dd;transform:translateY(-1px)}
+.ph{position:relative;aspect-ratio:4/3;background:linear-gradient(160deg,#e9f6f8,#cfeaee);display:flex;align-items:center;justify-content:center;overflow:hidden}
+.ph img{width:100%;height:100%;object-fit:cover;display:block}
+.ph svg{width:44%;opacity:.55}
+.cbody{padding:9px 11px 11px}
+.cname{font-weight:700;font-size:13.5px;line-height:1.3}
+.stars{font-size:11.5px;letter-spacing:1px;color:var(--gold);margin-top:3px}
+.stars .off{color:#d5e2e6}
+.sites{display:flex;gap:4px;flex-wrap:wrap;margin-top:7px}
+.site{font:500 10px var(--sans);color:var(--dim);border:1px solid var(--line);border-radius:5px;padding:3px 6px;white-space:nowrap;background:var(--surface2)}
+.nrec{font:500 10px var(--mono);color:var(--faint);margin-top:6px}
+
+/* detail */
+.back{display:inline-block;font:600 12.5px var(--sans);color:var(--dim);margin:12px 0 8px;cursor:pointer}
+.hero{border-radius:14px;overflow:hidden;border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow)}
+.hero .ph{aspect-ratio:16/10}
+.dhead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin:14px 2px 4px}
+.dname{font-weight:800;font-size:21px;line-height:1.25}
+.dby{font:500 11px var(--mono);color:var(--faint);margin-top:5px}
+.rtag{font:700 11px var(--mono);border:1px solid;border-radius:6px;padding:5px 8px;white-space:nowrap;background:var(--surface)}
+.desc{font-size:13.5px;line-height:1.7;color:var(--text);margin:10px 2px;white-space:pre-wrap}
+.summary{display:grid;grid-template-columns:1fr;gap:10px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:13px 14px;margin:12px 0;box-shadow:var(--shadow)}
+.sk{font:600 10.5px var(--mono);letter-spacing:.1em;color:var(--faint);text-transform:uppercase;margin-bottom:6px}
+.sv{font-size:13px;color:var(--text)}
+.seasons{display:flex;gap:8px;align-items:flex-end;height:46px;padding-top:4px}
+.season{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px}
+.sbar{width:100%;background:#dcebee;border-radius:3px 3px 0 0;min-height:2px;position:relative}
+.sbar.on{background:var(--aqua)}
+.slabel{font:600 10px var(--sans);color:var(--dim)}
+.scount{font:600 9px var(--mono);color:var(--faint)}
+.h2{font:700 12px var(--mono);letter-spacing:.12em;color:var(--dim);text-transform:uppercase;margin:20px 2px 10px}
+.rec{display:flex;gap:11px;background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:10px;margin-bottom:8px;box-shadow:var(--shadow)}
+.rthumb{width:62px;height:62px;border-radius:8px;overflow:hidden;flex:none;background:linear-gradient(160deg,#e9f6f8,#cfeaee);display:flex;align-items:center;justify-content:center}
+.rthumb img{width:100%;height:100%;object-fit:cover}
+.rthumb svg{width:50%;opacity:.5}
+.rmain{min-width:0;flex:1}
+.rtop{display:flex;justify-content:space-between;gap:8px;font-size:12.5px}
+.rpoint{font-weight:700}
+.rdate{font:500 11px var(--mono);color:var(--faint);white-space:nowrap}
+.rmeta{font:500 11px var(--mono);color:var(--dim);margin-top:3px}
+.rmemo{font-size:12px;color:var(--dim);line-height:1.55;margin-top:5px;white-space:pre-wrap}
+.actions{display:flex;gap:8px;margin:16px 0}
+.abtn{flex:1;font:700 13px var(--sans);border-radius:10px;padding:11px;cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
+.abtn.primary{background:var(--aqua);border-color:var(--aqua);color:#fff}
+.cmt{background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:10px 12px;margin-bottom:8px;box-shadow:var(--shadow)}
+.cby{font:600 11px var(--mono);color:var(--aqua-deep)}
+.ctext{font-size:13px;line-height:1.6;margin-top:4px;white-space:pre-wrap}
+.cdate{font:500 10px var(--mono);color:var(--faint);margin-top:5px}
+.cform{display:flex;gap:8px;margin-top:10px}
+.cin{flex:1;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:9px;color:var(--text);font-size:13px;padding:10px 12px}
+.cin:focus{outline:none;border-color:var(--aqua)}
+
+/* form */
+.form{display:flex;flex-direction:column;gap:14px;margin-top:14px}
+.fgroup{display:flex;flex-direction:column;gap:6px}
+.flabel{font:600 11px var(--mono);letter-spacing:.08em;color:var(--dim);text-transform:uppercase}
+.finput,.ftext,.fselect{background:var(--surface);border:1px solid var(--line);border-radius:9px;color:var(--text);font-size:14px;padding:11px 12px;width:100%}
+.finput:focus,.ftext:focus,.fselect:focus{outline:none;border-color:var(--aqua)}
+.ftext{min-height:74px;resize:vertical;line-height:1.6}
+.seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--surface)}
+.seg button{flex:1;font:600 13px var(--sans);padding:10px;border:none;background:transparent;color:var(--dim);cursor:pointer}
+.seg button[aria-pressed="true"]{background:#dff0ee;color:var(--text)}
+.rpick{display:flex;gap:6px}
+.rpick button{flex:1;font-size:15px;letter-spacing:1px;padding:9px 0;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:#cfdde2;cursor:pointer}
+.rpick button[aria-pressed="true"]{color:var(--gold);border-color:#ecd9b0;background:#fdf6e6}
+.previews{display:flex;gap:8px;flex-wrap:wrap}
+.pv{position:relative;width:74px;height:74px;border-radius:9px;overflow:hidden;border:1px solid var(--line)}
+.pv img{width:100%;height:100%;object-fit:cover}
+.pv button{position:absolute;top:3px;right:3px;width:20px;height:20px;border-radius:6px;border:none;background:rgba(18,64,78,.65);color:#fff;font-size:12px;line-height:1;cursor:pointer}
+.filebtn{font:600 13px var(--sans);color:var(--dim);border:1px dashed #b9d8de;border-radius:9px;padding:12px;background:transparent;cursor:pointer;text-align:center}
+.submit{font:700 14.5px var(--sans);color:#fff;background:var(--aqua);border:none;border-radius:11px;padding:14px;cursor:pointer;margin-top:4px;box-shadow:var(--shadow)}
+.submit:disabled{opacity:.5}
+.notice{font-size:12.5px;line-height:1.65;color:#6b5636;background:#fdf3e7;border:1px solid #f0dcc0;border-left:3px solid var(--warn);border-radius:9px;padding:11px 13px}
+
+/* admin */
+.mrow{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;box-shadow:var(--shadow)}
+.mname{flex:1;min-width:0;font-size:13.5px;font-weight:600}
+.mstat{font:600 10.5px var(--mono);color:var(--dim)}
+.mbtn{font:700 12px var(--sans);border-radius:8px;padding:8px 12px;border:1px solid var(--line);background:var(--surface2);color:var(--text);cursor:pointer}
+.mbtn.ok{background:var(--aqua);border-color:var(--aqua);color:#fff}
+.mbtn.ng{color:var(--danger);border-color:#f2cfc9}
+
+.empty{color:var(--faint);text-align:center;padding:46px 10px;font-size:13px;line-height:1.8}
+.footer{margin-top:34px;padding-top:14px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:10px}
+.fnote{font:500 10.5px var(--mono);color:var(--faint)}
+.reset{font:600 11px var(--sans);color:var(--dim);background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:6px 10px;cursor:pointer}
+.toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--navy);border:1px solid var(--navy);color:#fff;font:600 12.5px var(--sans);padding:11px 18px;border-radius:10px;z-index:40;opacity:0;transition:opacity .2s;pointer-events:none;max-width:86vw;text-align:center;box-shadow:0 4px 14px rgba(18,64,78,.25)}
+.toast.show{opacity:1}
+@media(min-width:640px){ .grid{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))} .summary{grid-template-columns:1fr 1fr 1fr} }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <a class="brand" href="#/">図鑑ラグーン<small>ZUKAN LAGOON</small></a>
+  <div class="topright">
+    <span class="mode" id="mode"></span>
+    <button class="postbtn" onclick="location.hash='#/post'">記録する</button>
+  </div>
+</header>
+
+<div id="app"></div>
+
+<footer class="footer">
+  <span class="fnote" id="fnote"></span>
+  <button class="reset" id="resetBtn" style="display:none">モックデータを初期化</button>
+</footer>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+/* ================= 設定 =================
+ * GAS_URL と LIFF_ID が空 → モックモード(この端末のlocalStorageのみ)。
+ * 本番: GAS_URL = GASウェブアプリの /exec URL、LIFF_ID = LIFFアプリのID、
+ *       APP_URL = 公開後のページURL(共有リンクの土台。空なら現在のURL)。
+ */
+const CONFIG = {
+  GAS_URL: "",
+  LIFF_ID: "",
+  APP_URL: "https://hishisyu354-commits.github.io/zukan-lagoon/"
+};
+const MODE = CONFIG.GAS_URL ? "live" : "mock";
+const LS_KEY = "dive-zukan-v1";
+
+/* ================= 状態 ================= */
+let DB = { fish: [], records: [], comments: [], points: [] };
+const FILTER = { q: "", point: "", rarity: new Set() };
+const AUTH = { ready: false, loggedIn: false, name: "", status: "", liff: false };
+let PENDING_MEMBERS = null;
+
+/* ================= 共通ユーティリティ ================= */
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(36).slice(2, 9));
+const todayStr = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+
+let toastTimer = null;
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+const FISH_SVG = `<svg viewBox="0 0 64 40" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 20c8-9 18-14 28-14 10 0 18 6 24 14-6 8-14 14-24 14-10 0-20-5-28-14Z" stroke="#8fbecb" stroke-width="2.4"/><circle cx="47" cy="17" r="2.2" fill="#8fbecb"/><path d="M6 20l-4-7v14l4-7Z" fill="#8fbecb"/></svg>`;
+
+function stars(n) {
+  n = Math.max(0, Math.min(5, Number(n) || 0));
+  return `<span class="stars">${"★".repeat(n)}<span class="off">${"★".repeat(5 - n)}</span></span>`;
+}
+function rcolor(n) { return `var(--r${Math.max(1, Math.min(5, Number(n) || 1))})`; }
+
+function photoSrc(p, w) {
+  if (!p) return "";
+  if (String(p).startsWith("data:")) return p;
+  return `https://drive.google.com/thumbnail?id=${encodeURIComponent(p)}&sz=w${w || 1200}`;
+}
+
+/* ================= データ導出 ================= */
+const pointById = (id) => DB.points.find(p => String(p.id) === String(id));
+const pointName = (id) => { const p = pointById(id); return p ? p.name : String(id || "?"); };
+
+function fishRecords(fishId) {
+  return DB.records.filter(r => String(r.fishId) === String(fishId))
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+function fishComments(fishId) {
+  return DB.comments.filter(c => c.targetType === "fish" && String(c.targetId) === String(fishId));
+}
+function derive(f) {
+  const recs = fishRecords(f.id);
+  const sites = [...new Set(recs.map(r => pointName(r.pointId)))];
+  const depths = recs.map(r => parseFloat(r.depth)).filter(n => !isNaN(n));
+  const depth = depths.length ? (Math.min(...depths) === Math.max(...depths) ? `${Math.min(...depths)}m` : `${Math.min(...depths)}〜${Math.max(...depths)}m`) : "";
+  const seasons = [0, 0, 0, 0]; // 春夏秋冬
+  recs.forEach(r => {
+    const m = parseInt(String(r.date).slice(5, 7), 10);
+    if (!m) return;
+    seasons[m >= 3 && m <= 5 ? 0 : m >= 6 && m <= 8 ? 1 : m >= 9 && m <= 11 ? 2 : 3]++;
+  });
+  const photos = recs.flatMap(r => r.photoIds || []);
+  return { recs, sites, depth, seasons, photos };
+}
+
+/* ================= モックストア ================= */
+function seedData() {
+  const points = [
+    { id: "izu-osezaki-wannai", area: "伊豆", name: "大瀬崎 湾内" },
+    { id: "izu-osezaki-sentan", area: "伊豆", name: "大瀬崎 先端" },
+    { id: "izu-koganezaki", area: "伊豆", name: "黄金崎" },
+    { id: "izu-futo", area: "伊豆", name: "富戸" },
+    { id: "izu-iop", area: "伊豆", name: "伊豆海洋公園(IOP)" },
+    { id: "okinawa-maeda", area: "沖縄本島", name: "真栄田岬" },
+    { id: "okinawa-zanpa", area: "沖縄本島", name: "残波岬" },
+    { id: "kerama-zamami", area: "慶良間", name: "座間味" },
+    { id: "hachijo-nazumado", area: "八丈島", name: "ナズマド" },
+    { id: "hachijo-yaene", area: "八丈島", name: "八重根" }
+  ];
+  const fish = [
+    { id: "f1", name: "クマドリカエルアンコウ", rarity: 5, description: "白ベースに赤の隈取り模様。動かないので撮り放題だが、見つけるのが大変。(サンプルデータ)", by: "サンプル", createdAt: "" },
+    { id: "f2", name: "ハナタツ", rarity: 4, description: "岩肌のヤギに擬態するタツノオトシゴの仲間。(サンプルデータ)", by: "サンプル", createdAt: "" },
+    { id: "f3", name: "キンギョハナダイ", rarity: 1, description: "どこにでも群れているオレンジの定番。群れの写真映えは抜群。(サンプルデータ)", by: "サンプル", createdAt: "" }
+  ];
+  const records = [
+    { id: "r1", fishId: "f1", pointId: "izu-osezaki-wannai", date: "2025-11-02", depth: "18", memo: "ロープ際の岩の下。ガイド様々。", photoIds: [], by: "サンプル", createdAt: "" },
+    { id: "r2", fishId: "f1", pointId: "izu-iop", date: "2025-12-14", depth: "12", memo: "", photoIds: [], by: "サンプル", createdAt: "" },
+    { id: "r3", fishId: "f2", pointId: "izu-koganezaki", date: "2026-05-05", depth: "8", memo: "黄金崎といえばこれ。", photoIds: [], by: "サンプル", createdAt: "" },
+    { id: "r4", fishId: "f3", pointId: "izu-futo", date: "2026-07-20", depth: "10", memo: "", photoIds: [], by: "サンプル", createdAt: "" },
+    { id: "r5", fishId: "f3", pointId: "izu-osezaki-wannai", date: "2026-06-01", depth: "6", memo: "", photoIds: [], by: "サンプル", createdAt: "" }
+  ];
+  const comments = [
+    { id: "c1", targetType: "fish", targetId: "f1", text: "これ見たさに冬の大瀬崎行くまである", by: "サンプル", createdAt: "" }
+  ];
+  return { fish, records, comments, points };
+}
+
+const LocalStore = {
+  load() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (raw) return Promise.resolve(JSON.parse(raw));
+    } catch (e) { /* 破損時はseedへ */ }
+    const d = seedData();
+    localStorage.setItem(LS_KEY, JSON.stringify(d));
+    return Promise.resolve(d);
+  },
+  save() { localStorage.setItem(LS_KEY, JSON.stringify(DB)); },
+  myName() { return localStorage.getItem(LS_KEY + "-name") || ""; },
+  setMyName(n) { localStorage.setItem(LS_KEY + "-name", n); },
+  async addFish(p) { const f = { id: uid(), name: p.name, rarity: p.rarity, description: p.description || "", by: this.myName(), createdAt: todayStr() }; DB.fish.push(f); this.save(); return f.id; },
+  async addRecord(p) {
+    let fishId = p.fishId;
+    if (p.newFish) fishId = await this.addFish(p.newFish);
+    DB.records.push({ id: uid(), fishId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo || "", photoIds: (p.photos || []).map(x => x.dataUrl), by: this.myName(), createdAt: todayStr() });
+    this.save(); return fishId;
+  },
+  async addComment(p) { DB.comments.push({ id: uid(), targetType: p.targetType, targetId: p.targetId, text: p.text, by: this.myName(), createdAt: todayStr() }); this.save(); },
+  reset() { localStorage.removeItem(LS_KEY); }
+};
+
+/* ================= リモートストア(GAS) ================= */
+const RemoteStore = {
+  async load() {
+    const res = await fetch(CONFIG.GAS_URL + "?action=all", { method: "GET" });
+    const j = await res.json();
+    if (!j.ok) throw new Error("load failed");
+    j.records.forEach(r => { r.photoIds = r.photoIds || []; });
+    return j;
+  },
+  async post(action, payload) {
+    const idToken = await getIdToken();
+    if (!idToken) throw { code: "auth" };
+    const res = await fetch(CONFIG.GAS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" }, // preflight回避(GASはOPTIONS非対応)
+      body: JSON.stringify(Object.assign({ action, idToken }, payload))
+    });
+    const j = await res.json();
+    if (!j.ok) throw j;
+    return j;
+  },
+  async addFish(p) { return (await this.post("addFish", p)).id; },
+  async addRecord(p) {
+    const payload = { fishId: p.fishId, newFish: p.newFish, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo, photos: (p.photos || []).map(x => ({ b64: x.b64, mime: x.mime })) };
+    return (await this.post("addRecord", payload)).fishId;
+  },
+  async addComment(p) { return this.post("addComment", p); }
+};
+const Store = MODE === "live" ? RemoteStore : LocalStore;
+
+/* ================= LIFF ================= */
+function loadLiffSdk() {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://static.line-scdn.net/liff/edge/2/sdk.js";
+    s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+async function initLiff() {
+  if (MODE !== "live" || !CONFIG.LIFF_ID) { AUTH.ready = true; return; }
+  try {
+    await loadLiffSdk();
+    await liff.init({ liffId: CONFIG.LIFF_ID });
+    AUTH.liff = true;
+    if (liff.isLoggedIn()) {
+      AUTH.loggedIn = true;
+      try {
+        const prof = await liff.getProfile();
+        AUTH.name = prof.displayName;
+      } catch (e) { /* profileなしでも続行 */ }
+      try {
+        const who = await RemoteStore.post("whoami", {});
+        AUTH.status = who.status; AUTH.name = who.name || AUTH.name;
+      } catch (e) { AUTH.status = ""; }
+    }
+  } catch (e) {
+    // file:// や未設定環境ではLIFF初期化に失敗する → 閲覧のみモードで続行
+    AUTH.liff = false;
+  }
+  AUTH.ready = true;
+}
+async function getIdToken() {
+  if (!AUTH.liff || !liff.isLoggedIn()) return null;
+  return liff.getIDToken();
+}
+function requireLogin() {
+  if (MODE === "mock") return true;
+  if (!AUTH.liff) { toast("この環境ではLINEログインを初期化できません(公開URLから開いてください)"); return false; }
+  if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return false; }
+  return true;
+}
+function handleApiError(err) {
+  if (!err) { toast("エラーが発生しました"); return; }
+  if (err.code === "auth") {
+    toast("LINEログインの有効期限切れです。再ログインします");
+    if (AUTH.liff) setTimeout(() => { liff.logout(); liff.login({ redirectUri: location.href }); }, 900);
+  } else if (err.code === "pending") {
+    toast("オーナーの承認待ちです。承認されると投稿できます");
+  } else if (err.code === "blocked") {
+    toast("投稿権限がありません");
+  } else if (err.code === "photo_too_large") {
+    toast("写真が大きすぎます(枚数を減らすか撮り直してください)");
+  } else {
+    toast(err.message || "エラー: " + (err.code || "unknown"));
+  }
+}
+
+/* ================= 写真圧縮 ================= */
+function compressImage(file, maxSide, quality) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+      const w = Math.round(img.naturalWidth * scale), h = Math.round(img.naturalHeight * scale);
+      const cv = document.createElement("canvas");
+      cv.width = w; cv.height = h;
+      cv.getContext("2d").drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      const dataUrl = cv.toDataURL("image/jpeg", quality);
+      resolve({ dataUrl, b64: dataUrl.split(",")[1], mime: "image/jpeg" });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("画像を読み込めません")); };
+    img.src = url;
+  });
+}
+
+/* ================= 共有 ================= */
+function fishUrl(f) {
+  const base = CONFIG.APP_URL || location.href.split("#")[0];
+  return base + "#/fish/" + encodeURIComponent(f.id);
+}
+async function shareFish(f) {
+  const d = derive(f);
+  const url = fishUrl(f);
+  const text = `${f.name} ${"★".repeat(f.rarity)}${d.sites.length ? " @" + d.sites.join("・") : ""}`;
+  // 1) LIFFのシェアピッカー(トークに直接カードを送れる)
+  if (AUTH.liff && liff.isLoggedIn() && liff.isApiAvailable && liff.isApiAvailable("shareTargetPicker")) {
+    const heroId = (d.photos || []).find(p => !String(p).startsWith("data:"));
+    const bubble = {
+      type: "bubble",
+      body: { type: "box", layout: "vertical", spacing: "sm", contents: [
+        { type: "text", text: f.name, weight: "bold", size: "lg", wrap: true },
+        { type: "text", text: "★".repeat(f.rarity) + "☆".repeat(5 - f.rarity), size: "sm", color: "#f0b23c" },
+        { type: "text", text: d.sites.length ? d.sites.join(" / ") : "記録なし", size: "xs", color: "#8b98a9", wrap: true }
+      ] },
+      footer: { type: "box", layout: "vertical", contents: [
+        { type: "button", style: "primary", color: "#0e8f85", action: { type: "uri", label: "図鑑で見る", uri: url } }
+      ] }
+    };
+    if (heroId) bubble.hero = { type: "image", url: photoSrc(heroId, 1024), size: "full", aspectRatio: "4:3", aspectMode: "cover" };
+    try {
+      await liff.shareTargetPicker([{ type: "flex", altText: text, contents: bubble }]);
+      return;
+    } catch (e) { /* キャンセル等 → 次の手段へ */ }
+  }
+  // 2) OSの共有シート
+  if (navigator.share) {
+    try { await navigator.share({ title: f.name, text, url }); return; } catch (e) { /* キャンセル */ }
+  }
+  // 3) コピー
+  try { await navigator.clipboard.writeText(text + " " + url); toast("リンクをコピーしました"); }
+  catch (e) { toast(url); }
+}
+
+/* ================= フィルタ ================= */
+function filteredFish() {
+  const q = FILTER.q.trim().toLowerCase();
+  return DB.fish.filter(f => {
+    const d = derive(f);
+    if (FILTER.rarity.size && !FILTER.rarity.has(Number(f.rarity))) return false;
+    if (FILTER.point && !d.recs.some(r => String(r.pointId) === FILTER.point)) return false;
+    if (q) {
+      const hay = (f.name + " " + d.sites.join(" ")).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  }).sort((a, b) => (b.rarity - a.rarity) || String(a.name).localeCompare(String(b.name), "ja"));
+}
+
+/* ================= 描画 ================= */
+function pointOptions(selected) {
+  const areas = [...new Set(DB.points.map(p => p.area))];
+  return areas.map(a =>
+    `<optgroup label="${esc(a)}">` +
+    DB.points.filter(p => p.area === a).map(p =>
+      `<option value="${esc(p.id)}" ${String(selected) === String(p.id) ? "selected" : ""}>${esc(p.name)}</option>`).join("") +
+    `</optgroup>`).join("");
+}
+
+function viewList() {
+  const list = filteredFish();
+  return `
+  <div class="filters">
+    <div class="frow">
+      <input class="search" id="q" placeholder="魚の名前・ポイント名で検索" value="${esc(FILTER.q)}">
+    </div>
+    <div class="frow">
+      <select class="pointsel" id="pointFilter">
+        <option value="">すべてのポイント</option>
+        ${pointOptions(FILTER.point)}
+      </select>
+    </div>
+    <div class="rchips">
+      ${[1, 2, 3, 4, 5].map(n => `<button class="rchip" data-r="${n}" aria-pressed="${FILTER.rarity.has(n)}">★${n}</button>`).join("")}
+    </div>
+    <div class="count">${list.length}種 / 全${DB.fish.length}種・記録${DB.records.length}件</div>
+  </div>
+  ${list.length ? `<div class="grid">${list.map(cardHtml).join("")}</div>`
+    : `<div class="empty">該当する魚がいません。<br>右上の「記録する」から最初の1匹を登録できます。</div>`}`;
+}
+
+function cardHtml(f) {
+  const d = derive(f);
+  const ph = d.photos[0];
+  const siteChips = d.sites.slice(0, 2).map(s => `<span class="site">${esc(s)}</span>`).join("")
+    + (d.sites.length > 2 ? `<span class="site">+${d.sites.length - 2}</span>` : "");
+  return `<div class="card" onclick="location.hash='#/fish/${esc(f.id)}'">
+    <div class="ph">${ph ? `<img src="${esc(photoSrc(ph, 600))}" loading="lazy" alt="">` : FISH_SVG}</div>
+    <div class="cbody">
+      <div class="cname">${esc(f.name)}</div>
+      ${stars(f.rarity)}
+      <div class="sites">${siteChips || `<span class="site">記録なし</span>`}</div>
+      <div class="nrec">${d.recs.length}件の記録</div>
+    </div>
+  </div>`;
+}
+
+function viewFish(id) {
+  const f = DB.fish.find(x => String(x.id) === String(id));
+  if (!f) return `<div class="empty">この魚は見つかりません</div>`;
+  const d = derive(f);
+  const cms = fishComments(f.id);
+  const maxSeason = Math.max(1, ...d.seasons);
+  const seasonNames = ["春", "夏", "秋", "冬"];
+  return `
+  <span class="back" onclick="history.back()">← 図鑑へ戻る</span>
+  <div class="hero"><div class="ph">${d.photos[0] ? `<img src="${esc(photoSrc(d.photos[0], 1400))}" alt="">` : FISH_SVG}</div></div>
+  <div class="dhead">
+    <div>
+      <div class="dname">${esc(f.name)}</div>
+      ${stars(f.rarity)}
+      <div class="dby">登録: ${esc(f.by || "?")}</div>
+    </div>
+    <span class="rtag" style="color:${rcolor(f.rarity)};border-color:${rcolor(f.rarity)}">レア度 ${esc(f.rarity)}</span>
+  </div>
+  ${f.description ? `<div class="desc">${esc(f.description)}</div>` : ""}
+  <div class="summary">
+    <div><div class="sk">見られた場所</div><div class="sv">${d.sites.length ? d.sites.map(s => `<span class="site">${esc(s)}</span>`).join(" ") : "—"}</div></div>
+    <div><div class="sk">水深</div><div class="sv">${esc(d.depth || "—")}</div></div>
+    <div><div class="sk">季節(記録数)</div>
+      <div class="seasons">${d.seasons.map((n, i) => `
+        <div class="season"><span class="scount">${n || ""}</span><div class="sbar ${n ? "on" : ""}" style="height:${Math.round(n / maxSeason * 34) + 2}px"></div><span class="slabel">${seasonNames[i]}</span></div>`).join("")}
+      </div>
+    </div>
+  </div>
+  <div class="actions">
+    <button class="abtn primary" onclick="location.hash='#/post/${esc(f.id)}'">この魚の記録を追加</button>
+    <button class="abtn" id="shareBtn">共有</button>
+  </div>
+  <div class="h2">発見記録 ${d.recs.length}件</div>
+  ${d.recs.map(r => `
+    <div class="rec">
+      <div class="rthumb">${(r.photoIds && r.photoIds[0]) ? `<img src="${esc(photoSrc(r.photoIds[0], 300))}" loading="lazy" alt="">` : FISH_SVG}</div>
+      <div class="rmain">
+        <div class="rtop"><span class="rpoint">${esc(pointName(r.pointId))}</span><span class="rdate">${esc(r.date)}</span></div>
+        <div class="rmeta">${r.depth ? esc(r.depth) + "m ・ " : ""}${esc(r.by || "?")}</div>
+        ${r.memo ? `<div class="rmemo">${esc(r.memo)}</div>` : ""}
+      </div>
+    </div>`).join("") || `<div class="empty">まだ記録がありません</div>`}
+  <div class="h2">コメント ${cms.length}件</div>
+  ${cms.map(c => `<div class="cmt"><span class="cby">${esc(c.by || "?")}</span><div class="ctext">${esc(c.text)}</div><div class="cdate">${esc(c.createdAt || "")}</div></div>`).join("")}
+  <div class="cform">
+    <input class="cin" id="cmtIn" placeholder="コメントを書く" maxlength="300">
+    <button class="postbtn" id="cmtBtn">送信</button>
+  </div>`;
+}
+
+function viewPost(fishId) {
+  const isNew = fishId ? false : DB.fish.length === 0;
+  const opts = DB.fish.slice().sort((a, b) => String(a.name).localeCompare(String(b.name), "ja"))
+    .map(f => `<option value="${esc(f.id)}" ${String(f.id) === String(fishId) ? "selected" : ""}>${esc(f.name)}</option>`).join("");
+  const authNote = (MODE === "live" && AUTH.ready)
+    ? (!AUTH.liff ? `<div class="notice">この環境ではLINEログインが使えないため投稿できません。公開URL(またはLINE内)から開いてください。</div>`
+      : !AUTH.loggedIn ? `<div class="notice">投稿にはLINEログインが必要です。送信時にログイン画面へ移動します。</div>`
+      : AUTH.status === "pending" ? `<div class="notice">いまオーナーの承認待ちです。承認されると投稿が反映されるようになります。</div>` : "")
+    : "";
+  return `
+  <span class="back" onclick="history.back()">← 戻る</span>
+  <div class="form" id="postForm">
+    ${authNote}
+    ${MODE === "mock" ? `
+    <div class="fgroup"><label class="flabel">投稿者名(モック用)</label>
+      <input class="finput" id="mockName" placeholder="ニックネーム" value="${esc(LocalStore.myName())}"></div>` : ""}
+    <div class="fgroup"><label class="flabel">魚</label>
+      <div class="seg">
+        <button type="button" id="segOld" aria-pressed="${!isNew}">既存の魚に追加</button>
+        <button type="button" id="segNew" aria-pressed="${isNew}">新しい魚を登録</button>
+      </div>
+    </div>
+    <div class="fgroup" id="grpOld" style="${isNew ? "display:none" : ""}">
+      <select class="fselect" id="fishSel">${opts || `<option value="">(まだ魚がいません)</option>`}</select>
+    </div>
+    <div id="grpNew" style="${isNew ? "" : "display:none"}">
+      <div class="fgroup"><label class="flabel">名前</label><input class="finput" id="newName" placeholder="例: クマドリカエルアンコウ" maxlength="60"></div>
+      <div class="fgroup" style="margin-top:12px"><label class="flabel">レア度</label>
+        <div class="rpick" id="rpick">${[1, 2, 3, 4, 5].map(n => `<button type="button" data-r="${n}" aria-pressed="${n === 3}">${"★".repeat(n)}</button>`).join("")}</div>
+      </div>
+      <div class="fgroup" style="margin-top:12px"><label class="flabel">プチ解説(任意)</label><textarea class="ftext" id="newDesc" placeholder="特徴・見つけ方のコツなど"></textarea></div>
+    </div>
+    <div class="fgroup"><label class="flabel">ポイント</label>
+      <select class="fselect" id="pointSel"><option value="">選択してください</option>${pointOptions("")}</select>
+    </div>
+    <div class="fgroup"><label class="flabel">日付</label><input class="finput" type="date" id="dateIn" value="${todayStr()}"></div>
+    <div class="fgroup"><label class="flabel">水深(m・任意)</label><input class="finput" type="number" id="depthIn" placeholder="例: 18" min="0" max="200" inputmode="decimal"></div>
+    <div class="fgroup"><label class="flabel">ひとことメモ(任意)</label><textarea class="ftext" id="memoIn" placeholder="どの辺にいたか・状況など"></textarea></div>
+    <div class="fgroup"><label class="flabel">写真(最大4枚)</label>
+      <div class="previews" id="previews"></div>
+      <button type="button" class="filebtn" id="fileBtn">写真を選ぶ</button>
+      <input type="file" id="fileIn" accept="image/*" multiple style="display:none">
+    </div>
+    <button class="submit" id="submitBtn">記録を保存する</button>
+  </div>`;
+}
+
+function viewAdmin() {
+  if (MODE !== "live") return `<div class="empty">承認管理はオンライン版のみの機能です</div>`;
+  if (AUTH.status !== "owner") return `<div class="empty">オーナーのみ開けるページです</div>`;
+  const rows = (PENDING_MEMBERS || []).map(m => `
+    <div class="mrow">
+      <span class="mname">${esc(m.name)}</span>
+      <span class="mstat">${esc(m.status)}</span>
+      ${m.status === "pending" ? `<button class="mbtn ok" data-approve="${esc(m.userId)}">承認</button>` : ""}
+      ${m.status !== "owner" && m.status !== "blocked" ? `<button class="mbtn ng" data-block="${esc(m.userId)}">ブロック</button>` : ""}
+    </div>`).join("");
+  return `
+  <span class="back" onclick="history.back()">← 戻る</span>
+  <div class="h2">メンバー管理</div>
+  ${rows || `<div class="empty">読み込み中…</div>`}`;
+}
+
+/* ================= ルーティング & イベント ================= */
+const POST_STATE = { photos: [], newFish: !0 };
+
+function route() {
+  const h = location.hash.replace(/^#\/?/, "");
+  const [page, arg] = h.split("/");
+  const app = $("#app");
+  if (page === "fish" && arg) {
+    app.innerHTML = viewFish(decodeURIComponent(arg));
+    bindFish(decodeURIComponent(arg));
+  } else if (page === "post") {
+    POST_STATE.photos = [];
+    app.innerHTML = viewPost(arg ? decodeURIComponent(arg) : "");
+    bindPost(arg ? decodeURIComponent(arg) : "");
+  } else if (page === "admin") {
+    app.innerHTML = viewAdmin();
+    bindAdmin();
+    if (MODE === "live" && AUTH.status === "owner" && PENDING_MEMBERS === null) {
+      RemoteStore.post("members", {}).then(j => { PENDING_MEMBERS = j.members; route(); }).catch(handleApiError);
+    }
+  } else {
+    app.innerHTML = viewList();
+    bindList();
+  }
+  window.scrollTo(0, 0);
+}
+
+function bindList() {
+  $("#q").addEventListener("input", e => { FILTER.q = e.target.value; refreshListOnly(); });
+  $("#pointFilter").addEventListener("change", e => { FILTER.point = e.target.value; route(); });
+  document.querySelectorAll(".rchip").forEach(b => b.addEventListener("click", () => {
+    const n = Number(b.dataset.r);
+    FILTER.rarity.has(n) ? FILTER.rarity.delete(n) : FILTER.rarity.add(n);
+    route();
+  }));
+}
+function refreshListOnly() {
+  // 検索中のフォーカスを保つため、グリッド部分だけ差し替える
+  const app = $("#app");
+  const grid = app.querySelector(".grid, .empty");
+  const count = app.querySelector(".count");
+  const list = filteredFish();
+  if (count) count.textContent = `${list.length}種 / 全${DB.fish.length}種・記録${DB.records.length}件`;
+  const html = list.length ? `<div class="grid">${list.map(cardHtml).join("")}</div>`
+    : `<div class="empty">該当する魚がいません</div>`;
+  if (grid) grid.outerHTML = html;
+}
+
+function bindFish(id) {
+  $("#shareBtn").addEventListener("click", () => {
+    const f = DB.fish.find(x => String(x.id) === String(id));
+    if (f) shareFish(f);
+  });
+  $("#cmtBtn").addEventListener("click", async () => {
+    const inp = $("#cmtIn");
+    const text = inp.value.trim();
+    if (!text) return;
+    if (MODE === "mock" && !LocalStore.myName()) {
+      const n = prompt("表示名(ニックネーム)を入れてください");
+      if (!n) return;
+      LocalStore.setMyName(n.trim());
+    }
+    if (!requireLogin()) return;
+    try {
+      await Store.addComment({ targetType: "fish", targetId: id, text });
+      if (MODE === "live") await reload();
+      route(); toast("コメントしました");
+    } catch (e) { handleApiError(e); }
+  });
+}
+
+function bindPost(fishId) {
+  const segOld = $("#segOld"), segNew = $("#segNew");
+  const setSeg = (isNew) => {
+    POST_STATE.newFish = isNew;
+    segOld.setAttribute("aria-pressed", String(!isNew));
+    segNew.setAttribute("aria-pressed", String(isNew));
+    $("#grpOld").style.display = isNew ? "none" : "";
+    $("#grpNew").style.display = isNew ? "" : "none";
+  };
+  // 既定: fishId指定あり→既存 / 指定なしで魚ゼロなら新規
+  setSeg(fishId ? false : DB.fish.length === 0);
+  segOld.addEventListener("click", () => setSeg(false));
+  segNew.addEventListener("click", () => setSeg(true));
+
+  let rarity = 3;
+  document.querySelectorAll("#rpick button").forEach(b => b.addEventListener("click", () => {
+    rarity = Number(b.dataset.r);
+    document.querySelectorAll("#rpick button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  }));
+
+  $("#fileBtn").addEventListener("click", () => $("#fileIn").click());
+  $("#fileIn").addEventListener("change", async (e) => {
+    const files = [...e.target.files].slice(0, 4 - POST_STATE.photos.length);
+    for (const file of files) {
+      try {
+        const p = await compressImage(file, MODE === "live" ? 1600 : 900, MODE === "live" ? 0.82 : 0.7);
+        POST_STATE.photos.push(p);
+      } catch (err) { toast("読み込めない画像がありました"); }
+    }
+    e.target.value = "";
+    renderPreviews();
+  });
+  renderPreviews();
+
+  $("#submitBtn").addEventListener("click", async () => {
+    if (MODE === "mock") {
+      const n = ($("#mockName").value || "").trim();
+      if (!n) { toast("投稿者名を入れてください"); return; }
+      LocalStore.setMyName(n);
+    }
+    const isNew = POST_STATE.newFish;
+    const payload = {
+      pointId: $("#pointSel").value,
+      date: $("#dateIn").value,
+      depth: $("#depthIn").value,
+      memo: $("#memoIn").value.trim(),
+      photos: POST_STATE.photos
+    };
+    if (isNew) {
+      const name = $("#newName").value.trim();
+      if (!name) { toast("魚の名前を入れてください"); return; }
+      payload.newFish = { name, rarity, description: $("#newDesc").value.trim() };
+    } else {
+      payload.fishId = $("#fishSel").value;
+      if (!payload.fishId) { toast("魚を選んでください"); return; }
+    }
+    if (!payload.pointId) { toast("ポイントを選んでください"); return; }
+    if (!payload.date) { toast("日付を入れてください"); return; }
+    if (!requireLogin()) return;
+    const btn = $("#submitBtn");
+    btn.disabled = true; btn.textContent = "保存中…";
+    try {
+      const fid = await Store.addRecord(payload);
+      if (MODE === "live") await reload();
+      toast("記録を保存しました");
+      location.hash = "#/fish/" + encodeURIComponent(fid);
+    } catch (e) {
+      handleApiError(e);
+      btn.disabled = false; btn.textContent = "記録を保存する";
+    }
+  });
+}
+
+function renderPreviews() {
+  const box = $("#previews");
+  if (!box) return;
+  box.innerHTML = POST_STATE.photos.map((p, i) =>
+    `<div class="pv"><img src="${p.dataUrl}" alt=""><button data-del="${i}">×</button></div>`).join("");
+  box.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => {
+    POST_STATE.photos.splice(Number(b.dataset.del), 1);
+    renderPreviews();
+  }));
+}
+
+function bindAdmin() {
+  document.querySelectorAll("[data-approve]").forEach(b => b.addEventListener("click", async () => {
+    try { await RemoteStore.post("approve", { userId: b.dataset.approve }); PENDING_MEMBERS = null; route(); toast("承認しました"); }
+    catch (e) { handleApiError(e); }
+  }));
+  document.querySelectorAll("[data-block]").forEach(b => b.addEventListener("click", async () => {
+    if (!confirm("この人をブロックしますか?")) return;
+    try { await RemoteStore.post("block", { userId: b.dataset.block }); PENDING_MEMBERS = null; route(); toast("ブロックしました"); }
+    catch (e) { handleApiError(e); }
+  }));
+}
+
+/* ================= 起動 ================= */
+async function reload() { DB = await Store.load(); }
+
+function paintChrome() {
+  const m = $("#mode");
+  if (MODE === "mock") {
+    m.textContent = "モック(この端末のみ)";
+    m.classList.add("mock");
+    $("#fnote").textContent = "モックモード: データはこの端末のブラウザ内にのみ保存されます";
+    const rb = $("#resetBtn");
+    rb.style.display = "";
+    rb.addEventListener("click", () => {
+      if (confirm("モックデータを初期化しますか?(この端末の記録が消えます)")) { LocalStore.reset(); location.reload(); }
+    });
+  } else {
+    m.textContent = AUTH.loggedIn ? (AUTH.name + (AUTH.status === "owner" ? " (オーナー)" : AUTH.status === "pending" ? " (承認待ち)" : "")) : "未ログイン";
+    $("#fnote").textContent = "図鑑ラグーン";
+    if (AUTH.status === "owner") {
+      const a = document.createElement("a");
+      a.href = "#/admin"; a.className = "reset"; a.style.display = "inline-block"; a.textContent = "メンバー管理";
+      $("#resetBtn").replaceWith(a);
+    }
+  }
+}
+
+window.addEventListener("hashchange", route);
+(async function boot() {
+  try {
+    await initLiff();
+  } catch (e) { /* 続行 */ }
+  try {
+    await reload();
+  } catch (e) {
+    $("#app").innerHTML = `<div class="empty">データを読み込めませんでした。<br>通信環境を確認して再読み込みしてください。</div>`;
+    paintChrome();
+    return;
+  }
+  paintChrome();
+  route();
+})();
+</script>
+</body>
+</html>
