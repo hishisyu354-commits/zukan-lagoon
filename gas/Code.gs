@@ -27,18 +27,18 @@ var SHEET_DEFS = {
   members:  ["userId", "displayName", "status", "requestedAt", "updatedAt"]
 };
 
-// 初期ポイント(あとでシートから自由に追加・修正)
+// 初期ポイント(あとでシートから自由に追加・修正)。緯度経度はおおよそ(地図の目安用)
 var SEED_POINTS = [
-  ["izu-osezaki-wannai", "伊豆", "大瀬崎 湾内", "", ""],
-  ["izu-osezaki-sentan", "伊豆", "大瀬崎 先端", "", ""],
-  ["izu-koganezaki",     "伊豆", "黄金崎", "", ""],
-  ["izu-futo",           "伊豆", "富戸", "", ""],
-  ["izu-iop",            "伊豆", "伊豆海洋公園(IOP)", "", ""],
-  ["okinawa-maeda",      "沖縄本島", "真栄田岬", "", ""],
-  ["okinawa-zanpa",      "沖縄本島", "残波岬", "", ""],
-  ["kerama-zamami",      "慶良間", "座間味", "", ""],
-  ["hachijo-nazumado",   "八丈島", "ナズマド", "", ""],
-  ["hachijo-yaene",      "八丈島", "八重根", "", ""]
+  ["izu-osezaki-wannai", "伊豆", "大瀬崎 湾内", 35.0268, 138.7877],
+  ["izu-osezaki-sentan", "伊豆", "大瀬崎 先端", 35.0313, 138.786],
+  ["izu-koganezaki",     "伊豆", "黄金崎", 34.7947, 138.7637],
+  ["izu-futo",           "伊豆", "富戸", 34.9256, 139.133],
+  ["izu-iop",            "伊豆", "伊豆海洋公園(IOP)", 34.9092, 139.142],
+  ["okinawa-maeda",      "沖縄本島", "真栄田岬", 26.445, 127.7716],
+  ["okinawa-zanpa",      "沖縄本島", "残波岬", 26.4409, 127.7119],
+  ["kerama-zamami",      "慶良間", "座間味", 26.2283, 127.3038],
+  ["hachijo-nazumado",   "八丈島", "ナズマド", 33.1216, 139.7614],
+  ["hachijo-yaene",      "八丈島", "八重根", 33.1005, 139.7683]
 ];
 
 var LIMITS = {

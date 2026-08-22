@@ -142,6 +142,19 @@ select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid va
 .reset{font:600 11px var(--sans);color:var(--dim);background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:6px 10px;cursor:pointer}
 .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--navy);border:1px solid var(--navy);color:#fff;font:600 12.5px var(--sans);padding:11px 18px;border-radius:10px;z-index:40;opacity:0;transition:opacity .2s;pointer-events:none;max-width:86vw;text-align:center;box-shadow:0 4px 14px rgba(18,64,78,.25)}
 .toast.show{opacity:1}
+
+/* map */
+.viewseg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--surface);box-shadow:var(--shadow)}
+.viewseg button{flex:1;font:600 13px var(--sans);padding:9px;border:none;background:transparent;color:var(--dim);cursor:pointer}
+.viewseg button[aria-pressed="true"]{background:#dff0ee;color:var(--text);font-weight:700}
+#mapbox{height:62vh;min-height:340px;border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);background:var(--surface2);overflow:hidden}
+.mapnote{font:500 10.5px var(--mono);color:var(--faint);margin-top:8px;text-align:center}
+.pmark{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;color:#fff;font:700 12px var(--sans);border:2px solid #fff;box-shadow:0 1px 5px rgba(18,64,78,.35)}
+.pmark.zero{width:14px;height:14px;opacity:.75}
+.leaflet-container{font-family:var(--sans)}
+.leaflet-popup-content{font-family:var(--sans);margin:12px 14px}
+.leaflet-popup-content .pname{font-weight:800;font-size:14px;color:var(--text)}
+.leaflet-popup-content .pmeta{font:500 11px var(--mono);color:var(--dim);margin:3px 0 9px}
 @media(min-width:640px){ .grid{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))} .summary{grid-template-columns:1fr 1fr 1fr} }
 </style>
 </head>
@@ -239,17 +252,18 @@ function derive(f) {
 
 /* ================= モックストア ================= */
 function seedData() {
+  // 緯度経度はおおよそ(地図の目安用)。本番はpointsシートで自由に修正できる
   const points = [
-    { id: "izu-osezaki-wannai", area: "伊豆", name: "大瀬崎 湾内" },
-    { id: "izu-osezaki-sentan", area: "伊豆", name: "大瀬崎 先端" },
-    { id: "izu-koganezaki", area: "伊豆", name: "黄金崎" },
-    { id: "izu-futo", area: "伊豆", name: "富戸" },
-    { id: "izu-iop", area: "伊豆", name: "伊豆海洋公園(IOP)" },
-    { id: "okinawa-maeda", area: "沖縄本島", name: "真栄田岬" },
-    { id: "okinawa-zanpa", area: "沖縄本島", name: "残波岬" },
-    { id: "kerama-zamami", area: "慶良間", name: "座間味" },
-    { id: "hachijo-nazumado", area: "八丈島", name: "ナズマド" },
-    { id: "hachijo-yaene", area: "八丈島", name: "八重根" }
+    { id: "izu-osezaki-wannai", area: "伊豆", name: "大瀬崎 湾内", lat: 35.0268, lng: 138.7877 },
+    { id: "izu-osezaki-sentan", area: "伊豆", name: "大瀬崎 先端", lat: 35.0313, lng: 138.786 },
+    { id: "izu-koganezaki", area: "伊豆", name: "黄金崎", lat: 34.7947, lng: 138.7637 },
+    { id: "izu-futo", area: "伊豆", name: "富戸", lat: 34.9256, lng: 139.133 },
+    { id: "izu-iop", area: "伊豆", name: "伊豆海洋公園(IOP)", lat: 34.9092, lng: 139.142 },
+    { id: "okinawa-maeda", area: "沖縄本島", name: "真栄田岬", lat: 26.445, lng: 127.7716 },
+    { id: "okinawa-zanpa", area: "沖縄本島", name: "残波岬", lat: 26.4409, lng: 127.7119 },
+    { id: "kerama-zamami", area: "慶良間", name: "座間味", lat: 26.2283, lng: 127.3038 },
+    { id: "hachijo-nazumado", area: "八丈島", name: "ナズマド", lat: 33.1216, lng: 139.7614 },
+    { id: "hachijo-yaene", area: "八丈島", name: "八重根", lat: 33.1005, lng: 139.7683 }
   ];
   const fish = [
     { id: "f1", name: "クマドリカエルアンコウ", rarity: 5, description: "白ベースに赤の隈取り模様。動かないので撮り放題だが、見つけるのが大変。(サンプルデータ)", by: "サンプル", createdAt: "" },
@@ -468,6 +482,10 @@ function viewList() {
   const list = filteredFish();
   return `
   <div class="filters">
+    <div class="viewseg">
+      <button data-view="list" aria-pressed="true">一覧</button>
+      <button data-view="map" aria-pressed="false">マップ</button>
+    </div>
     <div class="frow">
       <input class="search" id="q" placeholder="魚の名前・ポイント名で検索" value="${esc(FILTER.q)}">
     </div>
@@ -615,6 +633,134 @@ function viewAdmin() {
   ${rows || `<div class="empty">読み込み中…</div>`}`;
 }
 
+/* ================= マップ(Phase2: 実地図でポイント選択) ================= */
+let MAP = null, MAP_LAYER = null, LEAFLET_P = null;
+const MAPSTATE = { center: null, zoom: null };
+
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(true);
+  if (LEAFLET_P) return LEAFLET_P;
+  LEAFLET_P = new Promise((resolve, reject) => {
+    const css = document.createElement("link");
+    css.rel = "stylesheet";
+    css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+    document.head.appendChild(css);
+    const js = document.createElement("script");
+    js.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+    js.onload = () => resolve(true);
+    js.onerror = () => { LEAFLET_P = null; reject(new Error("leaflet load failed")); };
+    document.head.appendChild(js);
+  });
+  return LEAFLET_P;
+}
+
+function speciesAtPoint(pid) {
+  const q = FILTER.q.trim().toLowerCase();
+  return DB.fish.filter(f => {
+    if (FILTER.rarity.size && !FILTER.rarity.has(Number(f.rarity))) return false;
+    if (q && !String(f.name).toLowerCase().includes(q)) return false;
+    return fishRecords(f.id).some(r => String(r.pointId) === String(pid));
+  });
+}
+
+function viewMap() {
+  return `
+  <div class="filters">
+    <div class="viewseg">
+      <button data-view="list" aria-pressed="false">一覧</button>
+      <button data-view="map" aria-pressed="true">マップ</button>
+    </div>
+    <div class="frow"><input class="search" id="q" placeholder="魚の名前で絞り込み" value="${esc(FILTER.q)}"></div>
+    <div class="rchips">
+      ${[1, 2, 3, 4, 5].map(n => `<button class="rchip" data-r="${n}" aria-pressed="${FILTER.rarity.has(n)}">★${n}</button>`).join("")}
+    </div>
+    <div class="count" id="mapcount"></div>
+  </div>
+  <div id="mapbox"></div>
+  <div class="mapnote">ピンの数字=そのポイントで見つかった種数 ・ 色=最高レア度 ・ 位置はおおよそ(pointsシートで修正可)</div>`;
+}
+
+function bindMap() {
+  document.querySelectorAll(".viewseg button").forEach(b => b.addEventListener("click", () => {
+    if (b.dataset.view === "list") location.hash = "#/";
+  }));
+  $("#q").addEventListener("input", e => { FILTER.q = e.target.value; updateMapMarkers(); });
+  document.querySelectorAll(".rchip").forEach(b => b.addEventListener("click", () => {
+    const n = Number(b.dataset.r);
+    FILTER.rarity.has(n) ? FILTER.rarity.delete(n) : FILTER.rarity.add(n);
+    b.setAttribute("aria-pressed", String(FILTER.rarity.has(n)));
+    updateMapMarkers();
+  }));
+}
+
+async function initMapView() {
+  const box = $("#mapbox");
+  if (!box) return;
+  try {
+    await loadLeaflet();
+  } catch (e) {
+    box.innerHTML = `<div class="empty">地図ライブラリを読み込めませんでした。<br>通信環境を確認して再読み込みしてください。</div>`;
+    return;
+  }
+  const box2 = $("#mapbox"); // await中にビューが切り替わった場合に備えて取り直す
+  if (MAP || !box2) return;
+  MAP = L.map(box2, { zoomControl: true });
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(MAP);
+  MAP_LAYER = L.layerGroup().addTo(MAP);
+  if (MAPSTATE.center) {
+    MAP.setView(MAPSTATE.center, MAPSTATE.zoom);
+  } else {
+    fitToPoints();
+  }
+  MAP.on("moveend", () => { MAPSTATE.center = MAP.getCenter(); MAPSTATE.zoom = MAP.getZoom(); });
+  updateMapMarkers();
+}
+
+function fitToPoints() {
+  const pts = DB.points.map(p => [parseFloat(p.lat), parseFloat(p.lng)]).filter(a => !isNaN(a[0]) && !isNaN(a[1]));
+  if (pts.length) {
+    MAP.fitBounds(L.latLngBounds(pts).pad(0.18));
+  } else {
+    MAP.setView([34.5, 137.5], 5); // 日本近海
+  }
+}
+
+function updateMapMarkers() {
+  if (!MAP || !MAP_LAYER) return;
+  MAP_LAYER.clearLayers();
+  let shownSpecies = 0, shownPoints = 0;
+  DB.points.forEach(p => {
+    const lat = parseFloat(p.lat), lng = parseFloat(p.lng);
+    if (isNaN(lat) || isNaN(lng)) return;
+    const sp = speciesAtPoint(p.id);
+    const n = sp.length;
+    if (n) { shownSpecies += n; shownPoints++; }
+    const maxR = n ? Math.max(...sp.map(f => Number(f.rarity) || 1)) : 1;
+    const icon = L.divIcon({
+      className: "",
+      html: n ? `<div class="pmark" style="background:var(--r${maxR})">${n}</div>` : `<div class="pmark zero" style="background:var(--r1)"></div>`,
+      iconSize: n ? [30, 30] : [14, 14],
+      iconAnchor: n ? [15, 15] : [7, 7]
+    });
+    const m = L.marker([lat, lng], { icon }).addTo(MAP_LAYER);
+    m.bindPopup(
+      `<div class="pname">${esc(p.name)}</div>` +
+      `<div class="pmeta">${esc(p.area)} ・ ${n}種の記録</div>` +
+      (n ? `<button class="postbtn" onclick="gotoPoint('${esc(p.id)}')">このポイントの魚を見る</button>` : "")
+    );
+  });
+  const c = $("#mapcount");
+  if (c) c.textContent = `記録のあるポイント ${shownPoints}ヶ所(絞り込み適用後)`;
+}
+
+window.gotoPoint = function (id) {
+  FILTER.point = String(id);
+  location.hash = "#/";
+};
+
 /* ================= ルーティング & イベント ================= */
 const POST_STATE = { photos: [], newFish: !0 };
 
@@ -622,7 +768,15 @@ function route() {
   const h = location.hash.replace(/^#\/?/, "");
   const [page, arg] = h.split("/");
   const app = $("#app");
-  if (page === "fish" && arg) {
+  if (MAP && page !== "map") {
+    try { MAP.remove(); } catch (e) { /* noop */ }
+    MAP = null; MAP_LAYER = null;
+  }
+  if (page === "map") {
+    app.innerHTML = viewMap();
+    bindMap();
+    initMapView();
+  } else if (page === "fish" && arg) {
     app.innerHTML = viewFish(decodeURIComponent(arg));
     bindFish(decodeURIComponent(arg));
   } else if (page === "post") {
@@ -643,6 +797,9 @@ function route() {
 }
 
 function bindList() {
+  document.querySelectorAll(".viewseg button").forEach(b => b.addEventListener("click", () => {
+    if (b.dataset.view === "map") location.hash = "#/map";
+  }));
   $("#q").addEventListener("input", e => { FILTER.q = e.target.value; refreshListOnly(); });
   $("#pointFilter").addEventListener("change", e => { FILTER.point = e.target.value; route(); });
   document.querySelectorAll(".rchip").forEach(b => b.addEventListener("click", () => {
