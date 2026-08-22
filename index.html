@@ -217,9 +217,34 @@ function photoSrc(p, w) {
   return `https://drive.google.com/thumbnail?id=${encodeURIComponent(p)}&sz=w${w || 1200}`;
 }
 
+/* ================= ポイント階層マスタ =================
+ * エリア > サブエリア > ポイント の階層。フロントのこのマスタが正。
+ * サーバーのpointsシートに未知idの行があれば追加として合流する(拡張口)。
+ * 緯度経度はおおよそ(地図の目安用)。 */
+const POINTS_MASTER = [
+  { id: "izu-osezaki-wannai", area: "伊豆", subarea: "大瀬崎", name: "湾内", lat: 35.0268, lng: 138.7877 },
+  { id: "izu-osezaki-sentan", area: "伊豆", subarea: "大瀬崎", name: "先端", lat: 35.0313, lng: 138.786 },
+  { id: "izu-koganezaki", area: "伊豆", subarea: "", name: "黄金崎", lat: 34.7947, lng: 138.7637 },
+  { id: "izu-futo", area: "伊豆", subarea: "", name: "富戸", lat: 34.9256, lng: 139.133 },
+  { id: "izu-iop", area: "伊豆", subarea: "", name: "伊豆海洋公園(IOP)", lat: 34.9092, lng: 139.142 },
+  { id: "okinawa-maeda", area: "沖縄本島", subarea: "恩納村", name: "真栄田岬", lat: 26.445, lng: 127.7716 },
+  { id: "okinawa-zanpa", area: "沖縄本島", subarea: "読谷村", name: "残波岬", lat: 26.4409, lng: 127.7119 },
+  { id: "kerama-zamami", area: "慶良間", subarea: "", name: "座間味", lat: 26.2283, lng: 127.3038 },
+  { id: "hachijo-nazumado", area: "八丈島", subarea: "", name: "ナズマド", lat: 33.1216, lng: 139.7614 },
+  { id: "hachijo-yaene", area: "八丈島", subarea: "", name: "八重根", lat: 33.1005, lng: 139.7683 },
+  { id: "hachijo-sokodo", area: "八丈島", subarea: "", name: "底土", lat: 33.113, lng: 139.801 }
+];
+function mergePoints(serverPts) {
+  const map = new Map(POINTS_MASTER.map(p => [String(p.id), p]));
+  (serverPts || []).forEach(p => { if (p && p.id && !map.has(String(p.id))) map.set(String(p.id), p); });
+  return [...map.values()];
+}
+
 /* ================= データ導出 ================= */
 const pointById = (id) => DB.points.find(p => String(p.id) === String(id));
-const pointName = (id) => { const p = pointById(id); return p ? p.name : String(id || "?"); };
+const pointLabel = (p) => p ? [p.subarea, p.name].filter(Boolean).join(" ") : "?";
+const pointPath = (p) => p ? [p.area, p.subarea, p.name].filter(Boolean).join(" ") : "";
+const pointName = (id) => { const p = pointById(id); return p ? pointLabel(p) : String(id || "?"); };
 
 function fishRecords(fishId) {
   return DB.records.filter(r => String(r.fishId) === String(fishId))
@@ -245,19 +270,7 @@ function derive(f) {
 
 /* ================= モックストア ================= */
 function seedData() {
-  // 緯度経度はおおよそ(地図の目安用)。本番はpointsシートで自由に修正できる
-  const points = [
-    { id: "izu-osezaki-wannai", area: "伊豆", name: "大瀬崎 湾内", lat: 35.0268, lng: 138.7877 },
-    { id: "izu-osezaki-sentan", area: "伊豆", name: "大瀬崎 先端", lat: 35.0313, lng: 138.786 },
-    { id: "izu-koganezaki", area: "伊豆", name: "黄金崎", lat: 34.7947, lng: 138.7637 },
-    { id: "izu-futo", area: "伊豆", name: "富戸", lat: 34.9256, lng: 139.133 },
-    { id: "izu-iop", area: "伊豆", name: "伊豆海洋公園(IOP)", lat: 34.9092, lng: 139.142 },
-    { id: "okinawa-maeda", area: "沖縄本島", name: "真栄田岬", lat: 26.445, lng: 127.7716 },
-    { id: "okinawa-zanpa", area: "沖縄本島", name: "残波岬", lat: 26.4409, lng: 127.7119 },
-    { id: "kerama-zamami", area: "慶良間", name: "座間味", lat: 26.2283, lng: 127.3038 },
-    { id: "hachijo-nazumado", area: "八丈島", name: "ナズマド", lat: 33.1216, lng: 139.7614 },
-    { id: "hachijo-yaene", area: "八丈島", name: "八重根", lat: 33.1005, lng: 139.7683 }
-  ];
+  const points = POINTS_MASTER.map(p => ({ ...p }));
   const fish = [
     { id: "f1", name: "クマドリカエルアンコウ", rarity: 5, description: "白ベースに赤の隈取り模様。動かないので撮り放題だが、見つけるのが大変。(サンプルデータ)", by: "サンプル", createdAt: "" },
     { id: "f2", name: "ハナタツ", rarity: 4, description: "岩肌のヤギに擬態するタツノオトシゴの仲間。(サンプルデータ)", by: "サンプル", createdAt: "" },
@@ -280,7 +293,11 @@ const LocalStore = {
   load() {
     try {
       const raw = localStorage.getItem(LS_KEY);
-      if (raw) return Promise.resolve(JSON.parse(raw));
+      if (raw) {
+        const d = JSON.parse(raw);
+        d.points = mergePoints(d.points); // 旧形式の保存データも新マスタで上書き
+        return Promise.resolve(d);
+      }
     } catch (e) { /* 破損時はseedへ */ }
     const d = seedData();
     localStorage.setItem(LS_KEY, JSON.stringify(d));
@@ -304,6 +321,7 @@ const RemoteStore = {
     const j = await res.json();
     if (!j.ok) throw new Error("load failed");
     j.records.forEach(r => { r.photoIds = r.photoIds || []; });
+    j.points = mergePoints(j.points);
     return j;
   },
   async post(action, payload) {
@@ -410,7 +428,9 @@ function filteredFish() {
     if (FILTER.rarity.size && !FILTER.rarity.has(Number(f.rarity))) return false;
     if (FILTER.point && !d.recs.some(r => String(r.pointId) === FILTER.point)) return false;
     if (q) {
-      const hay = (f.name + " " + d.sites.join(" ")).toLowerCase();
+      // 名前に加えて エリア>サブエリア>ポイント の全階層でヒットさせる(「八丈島」で島内全ポイントの魚が出る)
+      const paths = [...new Set(d.recs.map(r => pointPath(pointById(r.pointId))))];
+      const hay = (f.name + " " + paths.join(" ")).toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -423,7 +443,7 @@ function pointOptions(selected) {
   return areas.map(a =>
     `<optgroup label="${esc(a)}">` +
     DB.points.filter(p => p.area === a).map(p =>
-      `<option value="${esc(p.id)}" ${String(selected) === String(p.id) ? "selected" : ""}>${esc(p.name)}</option>`).join("") +
+      `<option value="${esc(p.id)}" ${String(selected) === String(p.id) ? "selected" : ""}>${esc(pointLabel(p))}</option>`).join("") +
     `</optgroup>`).join("");
 }
 
@@ -436,7 +456,7 @@ function viewList() {
       <button data-view="map" aria-pressed="false">マップ</button>
     </div>
     <div class="frow">
-      <input class="search" id="q" placeholder="魚の名前・ポイント名で検索" value="${esc(FILTER.q)}">
+      <input class="search" id="q" placeholder="魚の名前・エリア・ポイント名で検索" value="${esc(FILTER.q)}">
     </div>
     <div class="frow">
       <select class="pointsel" id="pointFilter">
@@ -629,9 +649,11 @@ function loadLeaflet() {
 
 function speciesAtPoint(pid) {
   const q = FILTER.q.trim().toLowerCase();
+  // 検索語がこのポイントの階層(エリア名など)に当たる場合、魚名での絞り込みは掛けない
+  const pathHit = q && pointPath(pointById(pid)).toLowerCase().includes(q);
   return DB.fish.filter(f => {
     if (FILTER.rarity.size && !FILTER.rarity.has(Number(f.rarity))) return false;
-    if (q && !String(f.name).toLowerCase().includes(q)) return false;
+    if (q && !pathHit && !String(f.name).toLowerCase().includes(q)) return false;
     return fishRecords(f.id).some(r => String(r.pointId) === String(pid));
   });
 }
@@ -643,7 +665,7 @@ function viewMap() {
       <button data-view="list" aria-pressed="false">一覧</button>
       <button data-view="map" aria-pressed="true">マップ</button>
     </div>
-    <div class="frow"><input class="search" id="q" placeholder="魚の名前で絞り込み" value="${esc(FILTER.q)}"></div>
+    <div class="frow"><input class="search" id="q" placeholder="魚の名前・エリア名で絞り込み" value="${esc(FILTER.q)}"></div>
     <div class="rchips">
       ${[1, 2, 3, 4, 5].map(n => `<button class="rchip" data-r="${n}" aria-pressed="${FILTER.rarity.has(n)}">★${n}</button>`).join("")}
     </div>
@@ -929,6 +951,8 @@ function renderTabs(active) {
 
 window.addEventListener("hashchange", route);
 (async function boot() {
+  const usp = new URLSearchParams(location.search);
+  if (usp.get("q")) FILTER.q = usp.get("q"); // 検索語つきURLの共有・検証用
   try {
     await initAuth();
   } catch (e) { /* 続行 */ }

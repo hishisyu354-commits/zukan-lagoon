@@ -27,22 +27,26 @@ var SHEET_DEFS = {
   fish:     ["id", "name", "rarity", "description", "createdByName", "createdByToken", "createdAt"],
   records:  ["id", "fishId", "pointId", "date", "depth", "memo", "photoIds", "userName", "token", "createdAt"],
   comments: ["id", "targetType", "targetId", "text", "userName", "token", "createdAt"],
-  points:   ["id", "area", "name", "lat", "lng"],
+  points:   ["id", "area", "subarea", "name", "lat", "lng"],
   members:  ["token", "displayName", "status", "requestedAt", "updatedAt"]
 };
 
-// 初期ポイント(あとでシートから自由に追加・修正)。緯度経度はおおよそ(地図の目安用)
+// 初期ポイント(新規setup時のみ使用)。階層=エリア>サブエリア>ポイント。緯度経度はおおよそ。
+// 【注】ポイントの正はフロント(index.htmlのPOINTS_MASTER)。稼働中のシートが旧5列形式でも
+// フロント側が同idを新形式で上書き表示するため、既存シートの改修・再デプロイは不要。
+// シートに「フロントに無い新しいid」の行を足せば追加ポイントとして合流する。
 var SEED_POINTS = [
-  ["izu-osezaki-wannai", "伊豆", "大瀬崎 湾内", 35.0268, 138.7877],
-  ["izu-osezaki-sentan", "伊豆", "大瀬崎 先端", 35.0313, 138.786],
-  ["izu-koganezaki",     "伊豆", "黄金崎", 34.7947, 138.7637],
-  ["izu-futo",           "伊豆", "富戸", 34.9256, 139.133],
-  ["izu-iop",            "伊豆", "伊豆海洋公園(IOP)", 34.9092, 139.142],
-  ["okinawa-maeda",      "沖縄本島", "真栄田岬", 26.445, 127.7716],
-  ["okinawa-zanpa",      "沖縄本島", "残波岬", 26.4409, 127.7119],
-  ["kerama-zamami",      "慶良間", "座間味", 26.2283, 127.3038],
-  ["hachijo-nazumado",   "八丈島", "ナズマド", 33.1216, 139.7614],
-  ["hachijo-yaene",      "八丈島", "八重根", 33.1005, 139.7683]
+  ["izu-osezaki-wannai", "伊豆", "大瀬崎", "湾内", 35.0268, 138.7877],
+  ["izu-osezaki-sentan", "伊豆", "大瀬崎", "先端", 35.0313, 138.786],
+  ["izu-koganezaki",     "伊豆", "", "黄金崎", 34.7947, 138.7637],
+  ["izu-futo",           "伊豆", "", "富戸", 34.9256, 139.133],
+  ["izu-iop",            "伊豆", "", "伊豆海洋公園(IOP)", 34.9092, 139.142],
+  ["okinawa-maeda",      "沖縄本島", "恩納村", "真栄田岬", 26.445, 127.7716],
+  ["okinawa-zanpa",      "沖縄本島", "読谷村", "残波岬", 26.4409, 127.7119],
+  ["kerama-zamami",      "慶良間", "", "座間味", 26.2283, 127.3038],
+  ["hachijo-nazumado",   "八丈島", "", "ナズマド", 33.1216, 139.7614],
+  ["hachijo-yaene",      "八丈島", "", "八重根", 33.1005, 139.7683],
+  ["hachijo-sokodo",     "八丈島", "", "底土", 33.113, 139.801]
 ];
 
 var LIMITS = {
