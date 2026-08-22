@@ -9,11 +9,12 @@
  *   3. デプロイ > ウェブアプリ / 実行ユーザー=自分 / アクセス=全員 → /exec URLを控える
  *   4. 公開ページの #/setup を開き、オーナーコードと表示名を入れて自分をオーナー登録
  *
- * ユーザー識別(案A):
+ * ユーザー識別(案A・承認ゲートなし版 2026-08-22菱沼判断):
  *   - 各端末が初回書き込み時にランダムな秘密トークンを生成し、書き込みに毎回添付する
- *   - membersシートで トークン→(表示名・状態) を管理。状態: owner/approved/pending/blocked
- *   - 未知のトークンの書き込みは pending で自動登録され、オーナーが承認するまで投稿不可
- *   - 表示名は自己申告(登録時のみ)。以後の投稿の名前はサーバー側の名簿から付ける
+ *   - membersシートで トークン→(表示名・状態) を管理。状態: owner/member/blocked
+ *   - 未知のトークンは即memberとして自動登録され、そのまま投稿できる(承認不要)
+ *   - 表示名は自己申告。同じトークンからの申告で変更可(フォームの名前欄=自分の名前)
+ *   - blockedだけは投稿拒否(オーナーが管理タブ or シート直編集で設定する非常ブレーキ)
  *   - オーナーはセットアップコードで確定(先着レースなし・機種変時も同コードで復帰可)
  *
  * 読み(doGet)は誰でも。公開JSONにトークンは含めない(表示名のみ)。
@@ -202,36 +203,37 @@ function doPost(e) {
 
     var me = findMember_(token);
 
-    // オーナー専用(名簿の閲覧・承認・ブロック)
-    if (req.action === "pending" || req.action === "approve" || req.action === "block" || req.action === "members") {
+    // オーナー専用(名簿の閲覧・ブロック)
+    if (req.action === "members" || req.action === "block") {
       if (!me || me.status !== "owner") return json_({ ok: false, code: "forbidden" });
-      if (req.action === "pending" || req.action === "members") {
-        var want = req.action === "pending" ? ["pending"] : ["owner", "approved", "pending", "blocked"];
-        var list = readAll_("members").filter(function (m) { return want.indexOf(m.status) >= 0; })
-          .map(function (m) { return { token: m.token, name: m.displayName, status: m.status, requestedAt: m.requestedAt }; });
+      if (req.action === "members") {
+        var list = readAll_("members").map(function (m) {
+          return { token: m.token, name: m.displayName, status: m.status, requestedAt: m.requestedAt };
+        });
         return json_({ ok: true, members: list });
       }
       var target = findMember_(String(req.token || ""));
       if (!target) return json_({ ok: false, code: "notfound" });
       if (target.status === "owner") return json_({ ok: false, code: "forbidden" });
-      updateMember_(target.token, { status: req.action === "approve" ? "approved" : "blocked", updatedAt: now_() });
+      updateMember_(target.token, { status: "blocked", updatedAt: now_() });
       return json_({ ok: true });
     }
 
-    // 書き込み系: 未知トークンは pending で自動登録(名前は自己申告・登録時のみ有効)
+    // 書き込み系: 承認ゲートなし。未知トークンは即member登録して受け付ける
     if (!me) {
-      appendRow_("members", {
-        token: token, displayName: clip_(req.name, LIMITS.maxNameLen) || "名無し",
-        status: "pending", requestedAt: now_(), updatedAt: now_()
-      });
-      return json_({ ok: false, code: "pending", message: "参加申請を受け付けました。オーナーの承認後に投稿できます。" });
+      var newbie = clip_(req.name, LIMITS.maxNameLen) || "名無し";
+      appendRow_("members", { token: token, displayName: newbie, status: "member", requestedAt: now_(), updatedAt: now_() });
+      me = { token: token, displayName: newbie, status: "member" };
     }
     if (me.status === "blocked") return json_({ ok: false, code: "blocked" });
-    if (me.status === "pending") {
-      return json_({ ok: false, code: "pending", message: "オーナーの承認待ちです。承認されると投稿できます。" });
+    // 名前変更はセルフサービス(同じトークン=同じ人。フォームの名前欄がそのまま自分の名前)
+    var newName = clip_(req.name, LIMITS.maxNameLen);
+    if (newName && newName !== String(me.displayName)) {
+      updateMember_(token, { displayName: newName, updatedAt: now_() });
+      me.displayName = newName;
     }
 
-    var auth = { token: token, name: me.displayName }; // 投稿者名はサーバー側名簿から付ける
+    var auth = { token: token, name: me.displayName };
     if (req.action === "addFish")    return addFish_(req, auth);
     if (req.action === "addRecord")  return addRecord_(req, auth);
     if (req.action === "addComment") return addComment_(req, auth);

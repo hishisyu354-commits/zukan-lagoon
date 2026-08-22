@@ -174,7 +174,7 @@ select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid va
 /* ================= 設定 =================
  * GAS_URL が空 → モックモード(この端末のlocalStorageのみ)。
  * 本番: GAS_URL = GASウェブアプリの /exec URL。
- * ユーザー識別(案A): 端末が生成する秘密トークン+自己申告ニックネーム+オーナー承認。
+ * ユーザー識別(案A): 端末が生成する秘密トークン+自己申告ニックネーム(承認ゲートなし)。
  */
 const CONFIG = {
   GAS_URL: "",
@@ -325,11 +325,12 @@ const RemoteStore = {
 };
 const Store = MODE === "live" ? RemoteStore : LocalStore;
 
-/* ================= ユーザー識別(端末トークン+オーナー承認) =================
+/* ================= ユーザー識別(端末トークン・承認ゲートなし) =================
  * 初回書き込み時に端末が秘密の乱数トークンを生成し、以後の書き込みに毎回添付。
- * サーバー側の名簿(members)でトークン→(表示名/状態)を管理し、
- * 未知のトークンは「参加申請(pending)」で止まり、オーナーの承認後に投稿できる。
- * オーナーは #/setup でGASのオーナーコードを入力して確定する。 */
+ * サーバー側の名簿(members)でトークン→(表示名/状態)を管理する。
+ * 承認は不要(未知トークンは即member登録)。blockedだけ投稿拒否。
+ * 名前はフォームの名前欄がそのまま自分の名前(同じトークンからは変更可)。
+ * オーナーは #/setup でGASのオーナーコードを入力して確定する(ブロック操作用)。 */
 const TOKEN_KEY = LS_KEY + "-token";
 function deviceToken() { return localStorage.getItem(TOKEN_KEY) || ""; }
 function ensureToken() {
@@ -352,10 +353,7 @@ async function initAuth() {
 }
 function handleApiError(err) {
   if (!err) { toast("エラーが発生しました"); return; }
-  if (err.code === "pending") {
-    AUTH.status = "pending";
-    toast(err.message || "オーナーの承認待ちです。承認されると投稿できます");
-  } else if (err.code === "blocked") {
+  if (err.code === "blocked") {
     toast("投稿権限がありません");
   } else if (err.code === "badcode") {
     toast("オーナーコードが違います");
@@ -525,16 +523,10 @@ function viewPost(fishId) {
   const isNew = fishId ? false : DB.fish.length === 0;
   const opts = DB.fish.slice().sort((a, b) => String(a.name).localeCompare(String(b.name), "ja"))
     .map(f => `<option value="${esc(f.id)}" ${String(f.id) === String(fishId) ? "selected" : ""}>${esc(f.name)}</option>`).join("");
-  const authNote = MODE !== "live" ? ""
-    : AUTH.status === "pending" ? `<div class="notice">いまオーナーの承認待ちです。承認されると投稿できるようになります。</div>`
-    : !AUTH.status ? `<div class="notice">はじめての投稿は「参加申請」としてオーナーに届き、承認されると投稿できるようになります。</div>`
-    : "";
   return `
   <div class="form" id="postForm">
-    ${authNote}
-    ${(MODE === "mock" || !AUTH.name) ? `
     <div class="fgroup"><label class="flabel">投稿者名(ニックネーム)</label>
-      <input class="finput" id="mockName" placeholder="例: しゅん" value="${esc(myName())}"></div>` : ""}
+      <input class="finput" id="mockName" placeholder="例: しゅん" value="${esc(AUTH.name || myName())}"></div>
     <div class="fgroup"><label class="flabel">魚</label>
       <div class="seg">
         <button type="button" id="segOld" aria-pressed="${!isNew}">既存の魚に追加</button>
@@ -567,13 +559,12 @@ function viewPost(fishId) {
 }
 
 function viewAdmin() {
-  if (MODE !== "live") return `<div class="empty">承認管理はオンライン版のみの機能です</div>`;
+  if (MODE !== "live") return `<div class="empty">メンバー管理はオンライン版のみの機能です</div>`;
   if (AUTH.status !== "owner") return `<div class="empty">オーナーのみ開けるページです</div>`;
   const rows = (PENDING_MEMBERS || []).map(m => `
     <div class="mrow">
       <span class="mname">${esc(m.name)}</span>
       <span class="mstat">${esc(m.status)} ・ …${esc(String(m.token).slice(-4))}</span>
-      ${m.status === "pending" ? `<button class="mbtn ok" data-approve="${esc(m.token)}">承認</button>` : ""}
       ${m.status !== "owner" && m.status !== "blocked" ? `<button class="mbtn ng" data-block="${esc(m.token)}">ブロック</button>` : ""}
     </div>`).join("");
   return `
@@ -913,10 +904,6 @@ function renderPreviews() {
 }
 
 function bindAdmin() {
-  document.querySelectorAll("[data-approve]").forEach(b => b.addEventListener("click", async () => {
-    try { await RemoteStore.post("approve", { token: b.dataset.approve }); PENDING_MEMBERS = null; route(); toast("承認しました"); }
-    catch (e) { handleApiError(e); }
-  }));
   document.querySelectorAll("[data-block]").forEach(b => b.addEventListener("click", async () => {
     if (!confirm("この人をブロックしますか?")) return;
     try { await RemoteStore.post("block", { token: b.dataset.block }); PENDING_MEMBERS = null; route(); toast("ブロックしました"); }
