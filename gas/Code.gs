@@ -1,30 +1,33 @@
 /**
- * サークル魚図鑑 — GASバックエンド
+ * 図鑑ラグーン — GASバックエンド(案A: 端末トークン方式・LINE不要)
  *
  * 初回セットアップ:
  *   1. script.google.com で新規プロジェクトを作り、このファイルを貼る
- *   2. スクリプトプロパティに LINE_CHANNEL_ID を設定
- *      (LINE DevelopersのLINEログインチャネルの「チャネルID」。シークレットではない)
- *   3. エディタから setup() を1回実行 → シートとDriveフォルダが自動生成される
- *   4. デプロイ > ウェブアプリ / 実行ユーザー=自分 / アクセス=全員 → /exec URLを控える
+ *      (appsscript.json は「プロジェクトの設定 → マニフェスト表示」で差し替え)
+ *   2. エディタから setup() を1回実行(権限承認) →
+ *      ログにシートURLと「オーナーコード」が出る。オーナーコードは誰にも見せない
+ *   3. デプロイ > ウェブアプリ / 実行ユーザー=自分 / アクセス=全員 → /exec URLを控える
+ *   4. 公開ページの #/setup を開き、オーナーコードと表示名を入れて自分をオーナー登録
  *
- * 権限モデル:
- *   - 読み(doGet)は誰でも。公開JSONにLINE userIdは含めない(表示名のみ)。
- *   - 書き(doPost)はLIFFのIDトークン必須。LINEの検証API(oauth2/v2.1/verify)で
- *     サーバー側からトークンを検証し、なりすましを防ぐ。
- *   - membersシートの status: owner / approved / pending / blocked。
- *     名簿が空のとき最初に認証した人がownerになる(デプロイ直後に自分が開くこと)。
- *   - 荒れた場合の削除はシート直編集で行う(MVPでは削除APIを持たない)。
+ * ユーザー識別(案A):
+ *   - 各端末が初回書き込み時にランダムな秘密トークンを生成し、書き込みに毎回添付する
+ *   - membersシートで トークン→(表示名・状態) を管理。状態: owner/approved/pending/blocked
+ *   - 未知のトークンの書き込みは pending で自動登録され、オーナーが承認するまで投稿不可
+ *   - 表示名は自己申告(登録時のみ)。以後の投稿の名前はサーバー側の名簿から付ける
+ *   - オーナーはセットアップコードで確定(先着レースなし・機種変時も同コードで復帰可)
+ *
+ * 読み(doGet)は誰でも。公開JSONにトークンは含めない(表示名のみ)。
+ * 削除・修正はスプレッドシート直編集で行う(削除APIを持たない=攻撃面を減らす)。
  */
 
 var PROPS = PropertiesService.getScriptProperties();
 
 var SHEET_DEFS = {
-  fish:     ["id", "name", "rarity", "description", "createdByName", "createdByUserId", "createdAt"],
-  records:  ["id", "fishId", "pointId", "date", "depth", "memo", "photoIds", "userName", "userId", "createdAt"],
-  comments: ["id", "targetType", "targetId", "text", "userName", "userId", "createdAt"],
+  fish:     ["id", "name", "rarity", "description", "createdByName", "createdByToken", "createdAt"],
+  records:  ["id", "fishId", "pointId", "date", "depth", "memo", "photoIds", "userName", "token", "createdAt"],
+  comments: ["id", "targetType", "targetId", "text", "userName", "token", "createdAt"],
   points:   ["id", "area", "name", "lat", "lng"],
-  members:  ["userId", "displayName", "status", "requestedAt", "updatedAt"]
+  members:  ["token", "displayName", "status", "requestedAt", "updatedAt"]
 };
 
 // 初期ポイント(あとでシートから自由に追加・修正)。緯度経度はおおよそ(地図の目安用)
@@ -46,14 +49,15 @@ var LIMITS = {
   maxPhotoBase64Bytes: 2 * 1024 * 1024, // 圧縮済み前提(クライアントで長辺1600px/0.82)
   maxTextLen: 1000,
   maxCommentLen: 300,
-  maxNameLen: 60
+  maxNameLen: 60,
+  minTokenLen: 16
 };
 
 /* ---------------- セットアップ ---------------- */
 
 function setup() {
   var ssId = PROPS.getProperty("SS_ID");
-  var ss = ssId ? SpreadsheetApp.openById(ssId) : SpreadsheetApp.create("dive-zukan-db");
+  var ss = ssId ? SpreadsheetApp.openById(ssId) : SpreadsheetApp.create("zukan-lagoon-db");
   if (!ssId) PROPS.setProperty("SS_ID", ss.getId());
 
   Object.keys(SHEET_DEFS).forEach(function (name) {
@@ -72,12 +76,19 @@ function setup() {
 
   var folderId = PROPS.getProperty("PHOTO_FOLDER_ID");
   if (!folderId) {
-    var folder = DriveApp.createFolder("dive-zukan-photos");
+    var folder = DriveApp.createFolder("zukan-lagoon-photos");
     PROPS.setProperty("PHOTO_FOLDER_ID", folder.getId());
   }
 
+  var code = PROPS.getProperty("OWNER_SETUP_CODE");
+  if (!code) {
+    code = Utilities.getUuid().replace(/-/g, "").slice(0, 12);
+    PROPS.setProperty("OWNER_SETUP_CODE", code);
+  }
+
   Logger.log("スプレッドシート: " + ss.getUrl());
-  Logger.log("LINE_CHANNEL_ID 設定済み?: " + (PROPS.getProperty("LINE_CHANNEL_ID") ? "yes" : "NO — スクリプトプロパティに設定して"));
+  Logger.log("オーナーコード(誰にも見せない): " + code);
+  Logger.log("次: ウェブアプリとしてデプロイ(実行=自分/アクセス=全員) → 公開ページの #/setup でこのコードを入力");
 }
 
 /* ---------------- シートユーティリティ ---------------- */
@@ -104,11 +115,11 @@ function appendRow_(name, obj) {
   }));
 }
 
-function updateMember_(userId, patch) {
+function updateMember_(token, patch) {
   var sh = ss_().getSheetByName("members");
   var vals = sh.getDataRange().getValues();
   for (var i = 1; i < vals.length; i++) {
-    if (String(vals[i][0]) === String(userId)) {
+    if (String(vals[i][0]) === String(token)) {
       var head = vals[0];
       Object.keys(patch).forEach(function (k) {
         var col = head.indexOf(k);
@@ -120,13 +131,17 @@ function updateMember_(userId, patch) {
   return false;
 }
 
+function findMember_(token) {
+  return readAll_("members").filter(function (m) { return String(m.token) === String(token); })[0] || null;
+}
+
 /* ---------------- 公開読み取りAPI ---------------- */
 
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) || "all";
   if (action === "ping") return json_({ ok: true, ts: new Date().toISOString() });
 
-  // 公開ペイロード: userId系の列は落とす(§プライバシー)
+  // 公開ペイロード: トークン列は落とす(§プライバシー/なりすまし防止)
   var fish = readAll_("fish").map(function (f) {
     return { id: f.id, name: f.name, rarity: Number(f.rarity) || 0, description: f.description, by: f.createdByName, createdAt: f.createdAt };
   });
@@ -158,39 +173,65 @@ function doPost(e) {
     return json_({ ok: false, code: "badreq" });
   }
 
-  var auth = verifyLineToken_(req.idToken);
-  if (!auth) return json_({ ok: false, code: "auth", message: "LINEログインの有効期限切れ。再ログインしてください。" });
+  var token = String(req.deviceToken || "").trim();
+  if (token.length < LIMITS.minTokenLen) return json_({ ok: false, code: "badreq" });
 
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    var me = ensureMember_(auth);
-
-    if (req.action === "whoami") {
-      return json_({ ok: true, status: me.status, name: auth.name });
+    // オーナー登録(セットアップコード方式)。機種変時も同コードで復帰できる
+    if (req.action === "claimOwner") {
+      var code = PROPS.getProperty("OWNER_SETUP_CODE");
+      if (!code || String(req.setupCode || "").trim() !== code) {
+        return json_({ ok: false, code: "badcode", message: "オーナーコードが違います" });
+      }
+      var name = clip_(req.name, LIMITS.maxNameLen) || "オーナー";
+      if (findMember_(token)) {
+        updateMember_(token, { displayName: name, status: "owner", updatedAt: now_() });
+      } else {
+        appendRow_("members", { token: token, displayName: name, status: "owner", requestedAt: now_(), updatedAt: now_() });
+      }
+      return json_({ ok: true, status: "owner", name: name });
     }
-    if (me.status === "blocked") return json_({ ok: false, code: "blocked" });
 
-    // オーナー専用
+    // whoami は照会のみ(未登録なら status="")
+    if (req.action === "whoami") {
+      var m0 = findMember_(token);
+      return json_({ ok: true, status: m0 ? m0.status : "", name: m0 ? m0.displayName : "" });
+    }
+
+    var me = findMember_(token);
+
+    // オーナー専用(名簿の閲覧・承認・ブロック)
     if (req.action === "pending" || req.action === "approve" || req.action === "block" || req.action === "members") {
-      if (me.status !== "owner") return json_({ ok: false, code: "forbidden" });
+      if (!me || me.status !== "owner") return json_({ ok: false, code: "forbidden" });
       if (req.action === "pending" || req.action === "members") {
         var want = req.action === "pending" ? ["pending"] : ["owner", "approved", "pending", "blocked"];
         var list = readAll_("members").filter(function (m) { return want.indexOf(m.status) >= 0; })
-          .map(function (m) { return { userId: m.userId, name: m.displayName, status: m.status, requestedAt: m.requestedAt }; });
+          .map(function (m) { return { token: m.token, name: m.displayName, status: m.status, requestedAt: m.requestedAt }; });
         return json_({ ok: true, members: list });
       }
-      var target = String(req.userId || "");
-      var next = req.action === "approve" ? "approved" : "blocked";
-      if (!updateMember_(target, { status: next, updatedAt: now_() })) return json_({ ok: false, code: "notfound" });
+      var target = findMember_(String(req.token || ""));
+      if (!target) return json_({ ok: false, code: "notfound" });
+      if (target.status === "owner") return json_({ ok: false, code: "forbidden" });
+      updateMember_(target.token, { status: req.action === "approve" ? "approved" : "blocked", updatedAt: now_() });
       return json_({ ok: true });
     }
 
-    // 投稿系はowner/approvedのみ
+    // 書き込み系: 未知トークンは pending で自動登録(名前は自己申告・登録時のみ有効)
+    if (!me) {
+      appendRow_("members", {
+        token: token, displayName: clip_(req.name, LIMITS.maxNameLen) || "名無し",
+        status: "pending", requestedAt: now_(), updatedAt: now_()
+      });
+      return json_({ ok: false, code: "pending", message: "参加申請を受け付けました。オーナーの承認後に投稿できます。" });
+    }
+    if (me.status === "blocked") return json_({ ok: false, code: "blocked" });
     if (me.status === "pending") {
       return json_({ ok: false, code: "pending", message: "オーナーの承認待ちです。承認されると投稿できます。" });
     }
 
+    var auth = { token: token, name: me.displayName }; // 投稿者名はサーバー側名簿から付ける
     if (req.action === "addFish")    return addFish_(req, auth);
     if (req.action === "addRecord")  return addRecord_(req, auth);
     if (req.action === "addComment") return addComment_(req, auth);
@@ -198,18 +239,6 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
-}
-
-function ensureMember_(auth) {
-  var members = readAll_("members");
-  var hit = members.filter(function (m) { return String(m.userId) === String(auth.userId); })[0];
-  if (hit) {
-    return hit;
-  }
-  // 名簿が空なら最初の認証者がオーナー(デプロイ直後に自分が開く前提)
-  var status = members.length === 0 ? "owner" : "pending";
-  appendRow_("members", { userId: auth.userId, displayName: auth.name, status: status, requestedAt: now_(), updatedAt: now_() });
-  return { userId: auth.userId, displayName: auth.name, status: status };
 }
 
 function addFish_(req, auth) {
@@ -220,7 +249,7 @@ function addFish_(req, auth) {
   appendRow_("fish", {
     id: id, name: name, rarity: rarity,
     description: clip_(req.description, LIMITS.maxTextLen),
-    createdByName: auth.name, createdByUserId: auth.userId, createdAt: now_()
+    createdByName: auth.name, createdByToken: auth.token, createdAt: now_()
   });
   return json_({ ok: true, id: id });
 }
@@ -254,7 +283,7 @@ function addRecord_(req, auth) {
     date: clip_(req.date, 10), depth: clip_(req.depth, 10),
     memo: clip_(req.memo, LIMITS.maxTextLen),
     photoIds: photoIds.join(","),
-    userName: auth.name, userId: auth.userId, createdAt: now_()
+    userName: auth.name, token: auth.token, createdAt: now_()
   });
   return json_({ ok: true, id: id, fishId: fishId, photoIds: photoIds });
 }
@@ -267,26 +296,9 @@ function addComment_(req, auth) {
   var id = Utilities.getUuid();
   appendRow_("comments", {
     id: id, targetType: tt, targetId: String(req.targetId), text: text,
-    userName: auth.name, userId: auth.userId, createdAt: now_()
+    userName: auth.name, token: auth.token, createdAt: now_()
   });
   return json_({ ok: true, id: id });
-}
-
-/* ---------------- LINE IDトークン検証 ---------------- */
-
-function verifyLineToken_(idToken) {
-  if (!idToken) return null;
-  var channelId = PROPS.getProperty("LINE_CHANNEL_ID");
-  if (!channelId) return null;
-  var res = UrlFetchApp.fetch("https://api.line.me/oauth2/v2.1/verify", {
-    method: "post",
-    payload: { id_token: idToken, client_id: channelId },
-    muteHttpExceptions: true
-  });
-  if (res.getResponseCode() !== 200) return null;
-  var c = JSON.parse(res.getContentText());
-  if (!c.sub) return null;
-  return { userId: c.sub, name: c.name || "名無し", picture: c.picture || "" };
 }
 
 /* ---------------- 小物 ---------------- */

@@ -172,13 +172,12 @@ select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid va
 "use strict";
 
 /* ================= 設定 =================
- * GAS_URL と LIFF_ID が空 → モックモード(この端末のlocalStorageのみ)。
- * 本番: GAS_URL = GASウェブアプリの /exec URL、LIFF_ID = LIFFアプリのID、
- *       APP_URL = 公開後のページURL(共有リンクの土台。空なら現在のURL)。
+ * GAS_URL が空 → モックモード(この端末のlocalStorageのみ)。
+ * 本番: GAS_URL = GASウェブアプリの /exec URL。
+ * ユーザー識別(案A): 端末が生成する秘密トークン+自己申告ニックネーム+オーナー承認。
  */
 const CONFIG = {
   GAS_URL: "",
-  LIFF_ID: "",
   APP_URL: "https://hishisyu354-commits.github.io/zukan-lagoon/"
 };
 const MODE = CONFIG.GAS_URL ? "live" : "mock";
@@ -187,7 +186,7 @@ const LS_KEY = "dive-zukan-v1";
 /* ================= 状態 ================= */
 let DB = { fish: [], records: [], comments: [], points: [] };
 const FILTER = { q: "", point: "", rarity: new Set() };
-const AUTH = { ready: false, loggedIn: false, name: "", status: "", liff: false };
+const AUTH = { ready: false, status: "", name: "" };
 let PENDING_MEMBERS = null;
 
 /* ================= 共通ユーティリティ ================= */
@@ -195,6 +194,8 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(36).slice(2, 9));
 const todayStr = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+const myName = () => localStorage.getItem(LS_KEY + "-name") || "";
+const setMyName = (n) => localStorage.setItem(LS_KEY + "-name", n);
 
 let toastTimer = null;
 function toast(msg) {
@@ -286,16 +287,14 @@ const LocalStore = {
     return Promise.resolve(d);
   },
   save() { localStorage.setItem(LS_KEY, JSON.stringify(DB)); },
-  myName() { return localStorage.getItem(LS_KEY + "-name") || ""; },
-  setMyName(n) { localStorage.setItem(LS_KEY + "-name", n); },
-  async addFish(p) { const f = { id: uid(), name: p.name, rarity: p.rarity, description: p.description || "", by: this.myName(), createdAt: todayStr() }; DB.fish.push(f); this.save(); return f.id; },
+  async addFish(p) { const f = { id: uid(), name: p.name, rarity: p.rarity, description: p.description || "", by: myName(), createdAt: todayStr() }; DB.fish.push(f); this.save(); return f.id; },
   async addRecord(p) {
     let fishId = p.fishId;
     if (p.newFish) fishId = await this.addFish(p.newFish);
-    DB.records.push({ id: uid(), fishId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo || "", photoIds: (p.photos || []).map(x => x.dataUrl), by: this.myName(), createdAt: todayStr() });
+    DB.records.push({ id: uid(), fishId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo || "", photoIds: (p.photos || []).map(x => x.dataUrl), by: myName(), createdAt: todayStr() });
     this.save(); return fishId;
   },
-  async addComment(p) { DB.comments.push({ id: uid(), targetType: p.targetType, targetId: p.targetId, text: p.text, by: this.myName(), createdAt: todayStr() }); this.save(); }
+  async addComment(p) { DB.comments.push({ id: uid(), targetType: p.targetType, targetId: p.targetId, text: p.text, by: myName(), createdAt: todayStr() }); this.save(); }
 };
 
 /* ================= リモートストア(GAS) ================= */
@@ -308,12 +307,10 @@ const RemoteStore = {
     return j;
   },
   async post(action, payload) {
-    const idToken = await getIdToken();
-    if (!idToken) throw { code: "auth" };
     const res = await fetch(CONFIG.GAS_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" }, // preflight回避(GASはOPTIONS非対応)
-      body: JSON.stringify(Object.assign({ action, idToken }, payload))
+      body: JSON.stringify(Object.assign({ action, deviceToken: ensureToken(), name: myName() }, payload))
     });
     const j = await res.json();
     if (!j.ok) throw j;
@@ -328,57 +325,40 @@ const RemoteStore = {
 };
 const Store = MODE === "live" ? RemoteStore : LocalStore;
 
-/* ================= LIFF ================= */
-function loadLiffSdk() {
-  return new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = "https://static.line-scdn.net/liff/edge/2/sdk.js";
-    s.onload = resolve; s.onerror = reject;
-    document.head.appendChild(s);
-  });
-}
-async function initLiff() {
-  if (MODE !== "live" || !CONFIG.LIFF_ID) { AUTH.ready = true; return; }
-  try {
-    await loadLiffSdk();
-    await liff.init({ liffId: CONFIG.LIFF_ID });
-    AUTH.liff = true;
-    if (liff.isLoggedIn()) {
-      AUTH.loggedIn = true;
-      try {
-        const prof = await liff.getProfile();
-        AUTH.name = prof.displayName;
-      } catch (e) { /* profileなしでも続行 */ }
-      try {
-        const who = await RemoteStore.post("whoami", {});
-        AUTH.status = who.status; AUTH.name = who.name || AUTH.name;
-      } catch (e) { AUTH.status = ""; }
-    }
-  } catch (e) {
-    // file:// や未設定環境ではLIFF初期化に失敗する → 閲覧のみモードで続行
-    AUTH.liff = false;
+/* ================= ユーザー識別(端末トークン+オーナー承認) =================
+ * 初回書き込み時に端末が秘密の乱数トークンを生成し、以後の書き込みに毎回添付。
+ * サーバー側の名簿(members)でトークン→(表示名/状態)を管理し、
+ * 未知のトークンは「参加申請(pending)」で止まり、オーナーの承認後に投稿できる。
+ * オーナーは #/setup でGASのオーナーコードを入力して確定する。 */
+const TOKEN_KEY = LS_KEY + "-token";
+function deviceToken() { return localStorage.getItem(TOKEN_KEY) || ""; }
+function ensureToken() {
+  let t = deviceToken();
+  if (!t) {
+    const buf = new Uint8Array(24);
+    crypto.getRandomValues(buf);
+    t = Array.from(buf, b => b.toString(16).padStart(2, "0")).join("");
+    localStorage.setItem(TOKEN_KEY, t);
   }
+  return t;
+}
+async function initAuth() {
+  if (MODE !== "live" || !deviceToken()) { AUTH.ready = true; return; }
+  try {
+    const w = await RemoteStore.post("whoami", {});
+    AUTH.status = w.status || ""; AUTH.name = w.name || "";
+  } catch (e) { /* 通信不可などは閲覧のみで続行 */ }
   AUTH.ready = true;
-}
-async function getIdToken() {
-  if (!AUTH.liff || !liff.isLoggedIn()) return null;
-  return liff.getIDToken();
-}
-function requireLogin() {
-  if (MODE === "mock") return true;
-  if (!AUTH.liff) { toast("この環境ではLINEログインを初期化できません(公開URLから開いてください)"); return false; }
-  if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return false; }
-  return true;
 }
 function handleApiError(err) {
   if (!err) { toast("エラーが発生しました"); return; }
-  if (err.code === "auth") {
-    toast("LINEログインの有効期限切れです。再ログインします");
-    if (AUTH.liff) setTimeout(() => { liff.logout(); liff.login({ redirectUri: location.href }); }, 900);
-  } else if (err.code === "pending") {
-    toast("オーナーの承認待ちです。承認されると投稿できます");
+  if (err.code === "pending") {
+    AUTH.status = "pending";
+    toast(err.message || "オーナーの承認待ちです。承認されると投稿できます");
   } else if (err.code === "blocked") {
     toast("投稿権限がありません");
+  } else if (err.code === "badcode") {
+    toast("オーナーコードが違います");
   } else if (err.code === "photo_too_large") {
     toast("写真が大きすぎます(枚数を減らすか撮り直してください)");
   } else {
@@ -415,31 +395,11 @@ async function shareFish(f) {
   const d = derive(f);
   const url = fishUrl(f);
   const text = `${f.name} ${"★".repeat(f.rarity)}${d.sites.length ? " @" + d.sites.join("・") : ""}`;
-  // 1) LIFFのシェアピッカー(トークに直接カードを送れる)
-  if (AUTH.liff && liff.isLoggedIn() && liff.isApiAvailable && liff.isApiAvailable("shareTargetPicker")) {
-    const heroId = (d.photos || []).find(p => !String(p).startsWith("data:"));
-    const bubble = {
-      type: "bubble",
-      body: { type: "box", layout: "vertical", spacing: "sm", contents: [
-        { type: "text", text: f.name, weight: "bold", size: "lg", wrap: true },
-        { type: "text", text: "★".repeat(f.rarity) + "☆".repeat(5 - f.rarity), size: "sm", color: "#f0b23c" },
-        { type: "text", text: d.sites.length ? d.sites.join(" / ") : "記録なし", size: "xs", color: "#8b98a9", wrap: true }
-      ] },
-      footer: { type: "box", layout: "vertical", contents: [
-        { type: "button", style: "primary", color: "#0e8f85", action: { type: "uri", label: "図鑑で見る", uri: url } }
-      ] }
-    };
-    if (heroId) bubble.hero = { type: "image", url: photoSrc(heroId, 1024), size: "full", aspectRatio: "4:3", aspectMode: "cover" };
-    try {
-      await liff.shareTargetPicker([{ type: "flex", altText: text, contents: bubble }]);
-      return;
-    } catch (e) { /* キャンセル等 → 次の手段へ */ }
-  }
-  // 2) OSの共有シート
+  // 1) OSの共有シート(iPhoneならここにLINEも出る)
   if (navigator.share) {
     try { await navigator.share({ title: f.name, text, url }); return; } catch (e) { /* キャンセル */ }
   }
-  // 3) コピー
+  // 2) コピー
   try { await navigator.clipboard.writeText(text + " " + url); toast("リンクをコピーしました"); }
   catch (e) { toast(url); }
 }
@@ -565,17 +525,16 @@ function viewPost(fishId) {
   const isNew = fishId ? false : DB.fish.length === 0;
   const opts = DB.fish.slice().sort((a, b) => String(a.name).localeCompare(String(b.name), "ja"))
     .map(f => `<option value="${esc(f.id)}" ${String(f.id) === String(fishId) ? "selected" : ""}>${esc(f.name)}</option>`).join("");
-  const authNote = (MODE === "live" && AUTH.ready)
-    ? (!AUTH.liff ? `<div class="notice">この環境ではLINEログインが使えないため投稿できません。公開URL(またはLINE内)から開いてください。</div>`
-      : !AUTH.loggedIn ? `<div class="notice">投稿にはLINEログインが必要です。送信時にログイン画面へ移動します。</div>`
-      : AUTH.status === "pending" ? `<div class="notice">いまオーナーの承認待ちです。承認されると投稿が反映されるようになります。</div>` : "")
+  const authNote = MODE !== "live" ? ""
+    : AUTH.status === "pending" ? `<div class="notice">いまオーナーの承認待ちです。承認されると投稿できるようになります。</div>`
+    : !AUTH.status ? `<div class="notice">はじめての投稿は「参加申請」としてオーナーに届き、承認されると投稿できるようになります。</div>`
     : "";
   return `
   <div class="form" id="postForm">
     ${authNote}
-    ${MODE === "mock" ? `
-    <div class="fgroup"><label class="flabel">投稿者名(モック用)</label>
-      <input class="finput" id="mockName" placeholder="ニックネーム" value="${esc(LocalStore.myName())}"></div>` : ""}
+    ${(MODE === "mock" || !AUTH.name) ? `
+    <div class="fgroup"><label class="flabel">投稿者名(ニックネーム)</label>
+      <input class="finput" id="mockName" placeholder="例: しゅん" value="${esc(myName())}"></div>` : ""}
     <div class="fgroup"><label class="flabel">魚</label>
       <div class="seg">
         <button type="button" id="segOld" aria-pressed="${!isNew}">既存の魚に追加</button>
@@ -613,13 +572,47 @@ function viewAdmin() {
   const rows = (PENDING_MEMBERS || []).map(m => `
     <div class="mrow">
       <span class="mname">${esc(m.name)}</span>
-      <span class="mstat">${esc(m.status)}</span>
-      ${m.status === "pending" ? `<button class="mbtn ok" data-approve="${esc(m.userId)}">承認</button>` : ""}
-      ${m.status !== "owner" && m.status !== "blocked" ? `<button class="mbtn ng" data-block="${esc(m.userId)}">ブロック</button>` : ""}
+      <span class="mstat">${esc(m.status)} ・ …${esc(String(m.token).slice(-4))}</span>
+      ${m.status === "pending" ? `<button class="mbtn ok" data-approve="${esc(m.token)}">承認</button>` : ""}
+      ${m.status !== "owner" && m.status !== "blocked" ? `<button class="mbtn ng" data-block="${esc(m.token)}">ブロック</button>` : ""}
     </div>`).join("");
   return `
   <div class="h2">メンバー管理</div>
   ${rows || `<div class="empty">読み込み中…</div>`}`;
+}
+
+function viewSetup() {
+  if (MODE !== "live") return `<div class="empty">オーナー登録はオンライン版でのみ使えます<br>(GAS接続後にもう一度この画面を開いてください)</div>`;
+  if (AUTH.status === "owner") return `<div class="empty">この端末はすでにオーナーです</div>`;
+  return `
+  <div class="form">
+    <div class="notice">GASの setup() 実行ログに表示された「オーナーコード」を入力すると、この端末がオーナーになります。コードは誰にも見せないでください。</div>
+    <div class="fgroup"><label class="flabel">オーナーコード</label><input class="finput" id="ownerCode" autocomplete="off"></div>
+    <div class="fgroup"><label class="flabel">表示名</label><input class="finput" id="ownerName" placeholder="例: しゅん" value="${esc(myName())}"></div>
+    <button class="submit" id="claimBtn">オーナーとして登録</button>
+  </div>`;
+}
+
+function bindSetup() {
+  const btn = $("#claimBtn");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    const code = $("#ownerCode").value.trim();
+    const name = $("#ownerName").value.trim();
+    if (!code) { toast("オーナーコードを入れてください"); return; }
+    if (!name) { toast("表示名を入れてください"); return; }
+    btn.disabled = true;
+    try {
+      await RemoteStore.post("claimOwner", { setupCode: code, name });
+      setMyName(name);
+      AUTH.status = "owner"; AUTH.name = name;
+      toast("オーナーとして登録しました");
+      location.hash = "#/";
+    } catch (e) {
+      handleApiError(e);
+      btn.disabled = false;
+    }
+  });
 }
 
 /* ================= マップ(Phase2: 実地図でポイント選択) ================= */
@@ -765,6 +758,9 @@ function route() {
     app.innerHTML = viewMap();
     bindMap();
     initMapView();
+  } else if (page === "setup") {
+    app.innerHTML = viewSetup();
+    bindSetup();
   } else if (page === "fish" && arg) {
     app.innerHTML = viewFish(decodeURIComponent(arg));
     bindFish(decodeURIComponent(arg));
@@ -819,12 +815,11 @@ function bindFish(id) {
     const inp = $("#cmtIn");
     const text = inp.value.trim();
     if (!text) return;
-    if (MODE === "mock" && !LocalStore.myName()) {
+    if (!AUTH.name && !myName()) {
       const n = prompt("表示名(ニックネーム)を入れてください");
       if (!n) return;
-      LocalStore.setMyName(n.trim());
+      setMyName(n.trim());
     }
-    if (!requireLogin()) return;
     try {
       await Store.addComment({ targetType: "fish", targetId: id, text });
       if (MODE === "live") await reload();
@@ -868,10 +863,11 @@ function bindPost(fishId) {
   renderPreviews();
 
   $("#submitBtn").addEventListener("click", async () => {
-    if (MODE === "mock") {
-      const n = ($("#mockName").value || "").trim();
+    const nameEl = $("#mockName");
+    if (nameEl) {
+      const n = (nameEl.value || "").trim();
       if (!n) { toast("投稿者名を入れてください"); return; }
-      LocalStore.setMyName(n);
+      setMyName(n);
     }
     const isNew = POST_STATE.newFish;
     const payload = {
@@ -891,7 +887,6 @@ function bindPost(fishId) {
     }
     if (!payload.pointId) { toast("ポイントを選んでください"); return; }
     if (!payload.date) { toast("日付を入れてください"); return; }
-    if (!requireLogin()) return;
     const btn = $("#submitBtn");
     btn.disabled = true; btn.textContent = "保存中…";
     try {
@@ -919,12 +914,12 @@ function renderPreviews() {
 
 function bindAdmin() {
   document.querySelectorAll("[data-approve]").forEach(b => b.addEventListener("click", async () => {
-    try { await RemoteStore.post("approve", { userId: b.dataset.approve }); PENDING_MEMBERS = null; route(); toast("承認しました"); }
+    try { await RemoteStore.post("approve", { token: b.dataset.approve }); PENDING_MEMBERS = null; route(); toast("承認しました"); }
     catch (e) { handleApiError(e); }
   }));
   document.querySelectorAll("[data-block]").forEach(b => b.addEventListener("click", async () => {
     if (!confirm("この人をブロックしますか?")) return;
-    try { await RemoteStore.post("block", { userId: b.dataset.block }); PENDING_MEMBERS = null; route(); toast("ブロックしました"); }
+    try { await RemoteStore.post("block", { token: b.dataset.block }); PENDING_MEMBERS = null; route(); toast("ブロックしました"); }
     catch (e) { handleApiError(e); }
   }));
 }
@@ -948,7 +943,7 @@ function renderTabs(active) {
 window.addEventListener("hashchange", route);
 (async function boot() {
   try {
-    await initLiff();
+    await initAuth();
   } catch (e) { /* 続行 */ }
   try {
     await reload();
