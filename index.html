@@ -644,9 +644,10 @@ function kpChipsHtml(selected) {
     <div class="ptg">${DB.points.filter(p => p.area === a).map(p =>
       `<button type="button" class="ptgb" data-kp="${esc(p.id)}" aria-pressed="${sel.includes(String(p.id))}">${esc(pointLabel(p))}</button>`).join("")}</div>`).join("");
 }
-function bindKpChips(scope) {
+function bindKpChips(scope, onToggle) {
   (scope || document).querySelectorAll(".ptgb[data-kp]").forEach(b => b.addEventListener("click", () => {
     b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true"));
+    if (onToggle) onToggle();
   }));
 }
 function readKpChips() {
@@ -818,12 +819,17 @@ function viewPost(fishId) {
         <div class="rpick" id="rpick">${[1, 2, 3, 4, 5].map(n => `<button type="button" data-r="${n}" aria-pressed="${n === 3}">${"★".repeat(n)}</button>`).join("")}</div>
       </div>
       <div class="fgroup" style="margin-top:12px"><label class="flabel">プチ解説(任意)</label><textarea class="ftext" id="newDesc" placeholder="特徴・見つけ方のコツなど"></textarea></div>
-      <div class="fgroup" style="margin-top:12px"><label class="flabel">見られるポイント(任意・複数可)</label>
+      <div class="fgroup" style="margin-top:12px"><label class="flabel">見られるポイント(1つ以上・複数可)</label>
         <div id="kpWrapPost">${kpChipsHtml([])}</div>
-        <div style="font:500 10.5px var(--mono);color:var(--faint)">下の「ポイント」(今回の発見場所)は自動で含まれます。他でも見られる場所があれば選択。</div>
       </div>
+      <div class="fgroup" style="margin-top:12px"><label class="flabel">今回の発見場所(選んだ中から・1つなら自動)</label>
+        <select class="fselect" id="foundSel"><option value="">(上のチップを選ぶと出ます)</option></select>
+      </div>
+      <button type="button" class="filebtn" id="npToggle" style="margin-top:10px">＋ リストにないポイントを追加</button>
+      ${npFieldsHtml("np2")}
+      <div style="font:500 10.5px var(--mono);color:var(--faint);margin-top:6px">リストに無い場所で見つけた場合はここで追加(追加した場所が今回の発見場所になります)</div>
     </div>
-    <div class="fgroup"><label class="flabel">ポイント</label>
+    <div class="fgroup" id="grpPointExisting" style="${isNew ? "display:none" : ""}"><label class="flabel">ポイント</label>
       <select class="fselect" id="pointSel"><option value="">選択してください</option>${pointOptions("")}${NEW_POINT_OPT}</select>
       ${npFieldsHtml("np")}
     </div>
@@ -1145,13 +1151,19 @@ function bindPost(fishId) {
     segNew.setAttribute("aria-pressed", String(isNew));
     $("#grpOld").style.display = isNew ? "none" : "";
     $("#grpNew").style.display = isNew ? "" : "none";
+    $("#grpPointExisting").style.display = isNew ? "none" : ""; // 新規登録時の発見場所はチップ側で選ぶ
   };
   // 既定: fishId指定あり→既存 / 指定なしで魚ゼロなら新規
   setSeg(fishId ? false : DB.fish.length === 0);
   segOld.addEventListener("click", () => setSeg(false));
   segNew.addEventListener("click", () => setSeg(true));
   bindNewPoint("pointSel", "np");
-  bindKpChips($("#kpWrapPost"));
+  bindKpChips($("#kpWrapPost"), refreshFoundSel);
+  refreshFoundSel();
+  $("#npToggle").addEventListener("click", () => {
+    const w = $("#np2Wrap");
+    w.style.display = w.style.display === "none" ? "" : "none";
+  });
 
   let rarity = 3;
   document.querySelectorAll("#rpick button").forEach(b => b.addEventListener("click", () => {
@@ -1182,27 +1194,43 @@ function bindPost(fishId) {
     }
     const isNew = POST_STATE.newFish;
     const payload = {
-      pointId: $("#pointSel").value,
+      pointId: "",
       date: $("#dateIn").value,
       depth: $("#depthIn").value,
       memo: $("#memoIn").value.trim(),
       photos: POST_STATE.photos
     };
+    const np2A = $("#np2Area").value.trim(), np2N = $("#np2Name").value.trim();
     if (isNew) {
       const name = $("#newName").value.trim();
       if (!name) { toast("魚の名前を入れてください"); return; }
-      payload.newFish = { name, rarity, description: $("#newDesc").value.trim(), knownPointIds: readKpChips() };
+      payload.newFish = { name, rarity, description: $("#newDesc").value.trim() };
+      if ((np2A || np2N) && !(np2A && np2N)) { toast("新しいポイントのエリアとポイント名を入れてください"); return; }
+      if (!readKpChips().length && !(np2A && np2N)) { toast("見られるポイントを1つ以上選んでください"); return; }
     } else {
       payload.fishId = $("#fishSel").value;
       if (!payload.fishId) { toast("魚を選んでください"); return; }
+      if (!$("#pointSel").value) { toast("ポイントを選んでください"); return; }
     }
-    if (!payload.pointId) { toast("ポイントを選んでください"); return; }
     if (!payload.date) { toast("日付を入れてください"); return; }
     const btn = $("#submitBtn");
     btn.disabled = true; btn.textContent = "保存中…";
     try {
-      payload.pointId = await resolvePointSel("pointSel", "np");
-      if (!payload.pointId) { btn.disabled = false; btn.textContent = "記録を保存する"; return; }
+      if (isNew) {
+        // 発見場所はチップの選択から決める(新規追加ポイントがあればそこを発見場所に)
+        let kp = readKpChips();
+        if (np2A && np2N) {
+          const nid = await Store.addPoint({ area: np2A, subarea: $("#np2Sub").value.trim(), pointName: np2N });
+          kp = kp.concat([nid]);
+          payload.pointId = nid;
+        } else {
+          payload.pointId = $("#foundSel").value || kp[0];
+        }
+        payload.newFish.knownPointIds = kp;
+      } else {
+        payload.pointId = await resolvePointSel("pointSel", "np");
+        if (!payload.pointId) { btn.disabled = false; btn.textContent = "記録を保存する"; return; }
+      }
       const fid = await Store.addRecord(payload);
       if (MODE === "live") await reload();
       toast("記録を保存しました");
@@ -1212,6 +1240,17 @@ function bindPost(fishId) {
       btn.disabled = false; btn.textContent = "記録を保存する";
     }
   });
+}
+
+// 発見場所プルダウン=選択中チップの部分集合に保つ(1つならそれが自動選択)
+function refreshFoundSel() {
+  const sel = $("#foundSel");
+  if (!sel) return;
+  const ids = readKpChips();
+  const cur = sel.value;
+  sel.innerHTML = ids.length
+    ? ids.map(id => `<option value="${esc(id)}" ${String(id) === String(cur) ? "selected" : ""}>${esc(pointName(id))}</option>`).join("")
+    : `<option value="">(上のチップを選ぶと出ます)</option>`;
 }
 
 function renderPreviews() {
