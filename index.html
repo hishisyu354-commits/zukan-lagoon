@@ -99,6 +99,9 @@ select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid va
 .abtn.primary{background:var(--aqua);border-color:var(--aqua);color:#fff}
 .cmt{background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:10px 12px;margin-bottom:8px;box-shadow:var(--shadow)}
 .cby{font:600 11px var(--mono);color:var(--aqua-deep)}
+.cmttop{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.cmtdel{font:600 11px var(--sans);color:var(--danger);background:none;border:none;cursor:pointer;padding:2px 4px;flex:none}
+.cmtdel:disabled{opacity:.5}
 .ctext{font-size:13px;line-height:1.6;margin-top:4px;white-space:pre-wrap}
 .cdate{font:500 10px var(--mono);color:var(--faint);margin-top:5px}
 .cform{display:flex;gap:8px;margin-top:10px}
@@ -438,6 +441,11 @@ const LocalStore = {
     this.save(); return fishId;
   },
   async addComment(p) { DB.comments.push({ id: uid(), targetType: p.targetType, targetId: p.targetId, text: p.text, by: myName(), createdAt: todayStr() }); this.save(); },
+  async deleteComment(p) {
+    const i = DB.comments.findIndex(c => String(c.id) === String(p.commentId));
+    if (i < 0) throw { code: "notfound" };
+    DB.comments.splice(i, 1); this.save();
+  },
   async editFish(p) {
     const f = DB.fish.find(x => String(x.id) === String(p.fishId));
     if (!f) throw { code: "notfound" };
@@ -514,6 +522,7 @@ const RemoteStore = {
     return (await this.post("addRecord", payload)).fishId;
   },
   async addComment(p) { return this.post("addComment", p); },
+  async deleteComment(p) { return this.post("deleteComment", p); },
   async editFish(p) { return this.post("editFish", p); },
   async editRecord(p) {
     const payload = { recordId: p.recordId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo,
@@ -789,7 +798,13 @@ function viewFish(id) {
       </div>
     </div>`).join("") || `<div class="empty">まだ記録がありません</div>`}
   <div class="h2">コメント ${cms.length}件</div>
-  ${cms.map(c => `<div class="cmt"><span class="cby">${esc(c.by || "?")}</span><div class="ctext">${esc(c.text)}</div><div class="cdate">${esc(c.createdAt || "")}</div></div>`).join("")}
+  ${cms.map(c => {
+    const canDel = AUTH.status === "owner" || (!!meName() && c.by === meName());
+    return `<div class="cmt">
+    <div class="cmttop"><span class="cby">${esc(c.by || "?")}</span>${canDel ? `<button class="cmtdel" data-delcmt="${esc(c.id)}">削除</button>` : ""}</div>
+    <div class="ctext">${esc(c.text)}</div>
+    <div class="cdate">${esc(String(c.createdAt || "").slice(0, 16).replace("T", " "))}</div></div>`;
+  }).join("")}
   <div class="cform">
     <input class="cin" id="cmtIn" placeholder="コメントを書く" maxlength="300">
     <button class="postbtn" id="cmtBtn">送信</button>
@@ -1127,20 +1142,36 @@ function bindFish(id) {
     if (f) shareFish(f);
   });
   $("#cmtBtn").addEventListener("click", async () => {
-    const inp = $("#cmtIn");
+    const inp = $("#cmtIn"), btn = $("#cmtBtn");
     const text = inp.value.trim();
-    if (!text) return;
+    if (!text || btn.disabled) return;
     if (!AUTH.name && !myName()) {
       const n = prompt("表示名(ニックネーム)を入れてください");
       if (!n) return;
       setMyName(n.trim());
     }
+    btn.disabled = true; btn.textContent = "送信中…"; // 多重送信ガード(GAS応答は1〜3秒かかる)
     try {
       await Store.addComment({ targetType: "fish", targetId: id, text });
       if (MODE === "live") await reload();
       route(); toast("コメントしました");
-    } catch (e) { handleApiError(e); }
+    } catch (e) {
+      btn.disabled = false; btn.textContent = "送信";
+      handleApiError(e);
+    }
   });
+  document.querySelectorAll("[data-delcmt]").forEach(b => b.addEventListener("click", async () => {
+    if (!confirm("このコメントを削除しますか?")) return;
+    b.disabled = true;
+    try {
+      await Store.deleteComment({ commentId: b.dataset.delcmt });
+      if (MODE === "live") await reload();
+      route(); toast("削除しました");
+    } catch (e) {
+      b.disabled = false;
+      handleApiError(e);
+    }
+  }));
 }
 
 function bindPost(fishId) {

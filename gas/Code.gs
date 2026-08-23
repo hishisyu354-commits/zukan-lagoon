@@ -23,7 +23,7 @@
 
 var PROPS = PropertiesService.getScriptProperties();
 
-var VERSION = "v6"; // ping応答に含める。フロント/Claudeが反映確認に使う
+var VERSION = "v7"; // ping応答に含める。フロント/Claudeが反映確認に使う
 
 // リアクションの許可セット(フロントのRX_SETと一致させる)
 var REACTIONS = ["👍", "❤️", "🤩", "📸", "🤿"];
@@ -341,6 +341,7 @@ function doPost(e) {
     if (req.action === "addFish")    return addFish_(req, auth);
     if (req.action === "addRecord")  return addRecord_(req, auth);
     if (req.action === "addComment") return addComment_(req, auth);
+    if (req.action === "deleteComment") return deleteComment_(req, auth, me.status === "owner");
     if (req.action === "addPoint")   return addPoint_(req, auth);
     if (req.action === "toggleReaction") return toggleReaction_(req, auth);
     if (req.action === "addLog")     return addLog_(req, auth);
@@ -451,6 +452,24 @@ function toggleReaction_(req, auth) {
     userName: auth.name, token: auth.token, createdAt: now_()
   });
   return json_({ ok: true, state: "added", count: count + 1 });
+}
+
+// コメント削除は書いた本人(同じトークン)かオーナーのみ
+function deleteComment_(req, auth, isOwner) {
+  var c = getRowById_("comments", String(req.commentId || ""));
+  if (!c) return json_({ ok: false, code: "notfound" });
+  if (String(c.token) !== auth.token && !isOwner) {
+    return json_({ ok: false, code: "forbidden", message: "自分のコメントだけ削除できます" });
+  }
+  var sh = ss_().getSheetByName("comments");
+  var vals = sh.getDataRange().getValues();
+  for (var i = 1; i < vals.length; i++) {
+    if (String(vals[i][0]) === String(c.id)) {
+      sh.deleteRow(i + 1);
+      return json_({ ok: true });
+    }
+  }
+  return json_({ ok: false, code: "notfound" });
 }
 
 /* ---------------- ログAPI ---------------- */
