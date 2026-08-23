@@ -23,7 +23,7 @@
 
 var PROPS = PropertiesService.getScriptProperties();
 
-var VERSION = "v3"; // ping応答に含める。フロント/Claudeが反映確認に使う
+var VERSION = "v4"; // ping応答に含める。フロント/Claudeが反映確認に使う
 
 var SHEET_DEFS = {
   fish:     ["id", "name", "rarity", "description", "knownPointIds", "seasons", "createdByName", "createdByToken", "createdAt"],
@@ -116,8 +116,12 @@ function readAll_(name) {
 }
 
 function appendRow_(name, obj) {
+  // 必ず実シートのヘッダー順で書く。SHEET_DEFSの定義順で書くと、後から列を追加した
+  // 稼働中シート(列の物理順が定義と違う)で値が別の列にズレて入る(v3で踏んだバグ)。
+  ensureColumns_(name);
   var sh = ss_().getSheetByName(name);
-  sh.appendRow(SHEET_DEFS[name].map(function (h) {
+  var head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+  sh.appendRow(head.map(function (h) {
     return obj[h] === undefined || obj[h] === null ? "" : obj[h];
   }));
 }
@@ -312,6 +316,7 @@ function doPost(e) {
     if (req.action === "addFish")    return addFish_(req, auth);
     if (req.action === "addRecord")  return addRecord_(req, auth);
     if (req.action === "addComment") return addComment_(req, auth);
+    if (req.action === "addPoint")   return addPoint_(req, auth);
     if (req.action === "editFish")   return editFish_(req, auth);
     if (req.action === "editRecord") return editRecord_(req, auth, me.status === "owner");
     return json_({ ok: false, code: "unknown_action" });
@@ -371,6 +376,21 @@ function addComment_(req, auth) {
     id: id, targetType: tt, targetId: String(req.targetId), text: text,
     userName: auth.name, token: auth.token, createdAt: now_()
   });
+  return json_({ ok: true, id: id });
+}
+
+// メンバーなら誰でもポイントを追加できる(完全一致の重複は既存idを返す)。座標は後からシートで補える
+function addPoint_(req, auth) {
+  var area = clip_(String(req.area || "").trim(), 30);
+  var sub  = clip_(String(req.subarea || "").trim(), 30);
+  var name = clip_(String(req.pointName || "").trim(), 40);
+  if (!area || !name) return json_({ ok: false, code: "validation", message: "エリアとポイント名は必須" });
+  var dup = readAll_("points").filter(function (p) {
+    return String(p.area) === area && String(p.subarea || "") === sub && String(p.name) === name;
+  })[0];
+  if (dup) return json_({ ok: true, id: dup.id, existed: true });
+  var id = "p-" + Utilities.getUuid().slice(0, 8);
+  appendRow_("points", { id: id, area: area, subarea: sub, name: name, lat: "", lng: "" });
   return json_({ ok: true, id: id });
 }
 

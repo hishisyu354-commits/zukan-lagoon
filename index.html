@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>図鑑ラグーン</title>
 <meta name="description" content="ダイビングサークルの共有魚図鑑。見つけた魚を写真とポイント付きで記録する。">
 <meta property="og:title" content="図鑑ラグーン">
@@ -22,7 +22,7 @@
   --mono:ui-monospace,"SF Mono",Menlo,monospace;
 }
 *{box-sizing:border-box}
-html{background:#e6f4f6}
+html{background:#e6f4f6;touch-action:pan-x pan-y;-webkit-text-size-adjust:100%}
 body{margin:0;color:var(--text);font-family:var(--sans);-webkit-font-smoothing:antialiased;
   background:linear-gradient(180deg,#f6fcfd 0%,#e6f4f6 45%,#daeff2 100%)}
 body{max-width:960px;margin:0 auto;padding:0 14px calc(84px + env(safe-area-inset-bottom))}
@@ -38,7 +38,7 @@ button{font-family:inherit}
 /* filters */
 .filters{position:sticky;top:0;z-index:5;background:rgba(240,249,250,.94);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);padding:10px 0 8px;display:flex;flex-direction:column;gap:8px}
 .frow{display:flex;gap:8px}
-.search{flex:1;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:9px;color:var(--text);font-size:14px;padding:9px 12px;box-shadow:var(--shadow)}
+.search{flex:1;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:9px;color:var(--text);font-size:16px;padding:9px 12px;box-shadow:var(--shadow)}
 .search::placeholder{color:var(--faint)}
 .search:focus{outline:none;border-color:var(--aqua)}
 select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:9px;color:var(--text);font-size:13px;padding:9px 10px;appearance:none;box-shadow:var(--shadow)}
@@ -99,14 +99,14 @@ select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid va
 .ctext{font-size:13px;line-height:1.6;margin-top:4px;white-space:pre-wrap}
 .cdate{font:500 10px var(--mono);color:var(--faint);margin-top:5px}
 .cform{display:flex;gap:8px;margin-top:10px}
-.cin{flex:1;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:9px;color:var(--text);font-size:13px;padding:10px 12px}
+.cin{flex:1;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:9px;color:var(--text);font-size:16px;padding:10px 12px}
 .cin:focus{outline:none;border-color:var(--aqua)}
 
 /* form */
 .form{display:flex;flex-direction:column;gap:14px;margin-top:14px}
 .fgroup{display:flex;flex-direction:column;gap:6px}
 .flabel{font:600 11px var(--mono);letter-spacing:.08em;color:var(--dim);text-transform:uppercase}
-.finput,.ftext,.fselect{background:var(--surface);border:1px solid var(--line);border-radius:9px;color:var(--text);font-size:14px;padding:11px 12px;width:100%}
+.finput,.ftext,.fselect{background:var(--surface);border:1px solid var(--line);border-radius:9px;color:var(--text);font-size:16px;padding:11px 12px;width:100%}
 .finput:focus,.ftext:focus,.fselect:focus{outline:none;border-color:var(--aqua)}
 .ftext{min-height:74px;resize:vertical;line-height:1.6}
 .seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--surface)}
@@ -343,6 +343,12 @@ const LocalStore = {
     r.pointId = p.pointId; r.date = p.date; r.depth = p.depth; r.memo = p.memo || "";
     r.photoIds = (r.photoIds || []).filter(x => !remove.has(x)).concat((p.addPhotos || []).map(x => x.dataUrl));
     this.save();
+  },
+  async addPoint(p) {
+    const dup = DB.points.find(x => x.area === p.area && String(x.subarea || "") === (p.subarea || "") && x.name === p.pointName);
+    if (dup) return dup.id;
+    const np = { id: "p-" + uid(), area: p.area, subarea: p.subarea || "", name: p.pointName, lat: "", lng: "" };
+    DB.points.push(np); this.save(); return np.id;
   }
 };
 
@@ -378,7 +384,8 @@ const RemoteStore = {
     const payload = { recordId: p.recordId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo,
       removePhotoIds: p.removePhotoIds || [], addPhotos: (p.addPhotos || []).map(x => ({ b64: x.b64, mime: x.mime })) };
     return this.post("editRecord", payload);
-  }
+  },
+  async addPoint(p) { return (await this.post("addPoint", p)).id; }
 };
 const Store = MODE === "live" ? RemoteStore : LocalStore;
 
@@ -489,6 +496,35 @@ function pointOptions(selected) {
     DB.points.filter(p => p.area === a).map(p =>
       `<option value="${esc(p.id)}" ${String(selected) === String(p.id) ? "selected" : ""}>${esc(pointLabel(p))}</option>`).join("") +
     `</optgroup>`).join("");
+}
+
+/* 「リストにないポイントを追加」— 投稿/編集フォームのポイント選択に生やす共通部品 */
+const NEW_POINT_OPT = `<option value="__new__">＋ リストにないポイントを追加</option>`;
+function npFieldsHtml(pref) {
+  const areas = [...new Set(DB.points.map(p => p.area))];
+  return `<div id="${pref}Wrap" style="display:none">
+    <div class="fgroup" style="margin-top:10px"><label class="flabel">新しいポイント: エリア(必須)</label>
+      <input class="finput" id="${pref}Area" maxlength="30" placeholder="例: 伊豆" list="${pref}AreaList">
+      <datalist id="${pref}AreaList">${areas.map(a => `<option value="${esc(a)}">`).join("")}</datalist></div>
+    <div class="fgroup" style="margin-top:10px"><label class="flabel">サブエリア(任意)</label>
+      <input class="finput" id="${pref}Sub" maxlength="30" placeholder="例: 大瀬崎"></div>
+    <div class="fgroup" style="margin-top:10px"><label class="flabel">ポイント名(必須)</label>
+      <input class="finput" id="${pref}Name" maxlength="40" placeholder="例: 井田"></div>
+  </div>`;
+}
+function bindNewPoint(selId, pref) {
+  const sel = $("#" + selId);
+  sel.addEventListener("change", () => {
+    $("#" + pref + "Wrap").style.display = sel.value === "__new__" ? "" : "none";
+  });
+}
+async function resolvePointSel(selId, pref) {
+  const v = $("#" + selId).value;
+  if (v !== "__new__") return v;
+  const area = $("#" + pref + "Area").value.trim();
+  const name = $("#" + pref + "Name").value.trim();
+  if (!area || !name) { toast("新しいポイントのエリアとポイント名を入れてください"); return null; }
+  return Store.addPoint({ area, subarea: $("#" + pref + "Sub").value.trim(), pointName: name });
 }
 
 function viewList() {
@@ -623,7 +659,8 @@ function viewPost(fishId) {
       <div class="fgroup" style="margin-top:12px"><label class="flabel">プチ解説(任意)</label><textarea class="ftext" id="newDesc" placeholder="特徴・見つけ方のコツなど"></textarea></div>
     </div>
     <div class="fgroup"><label class="flabel">ポイント</label>
-      <select class="fselect" id="pointSel"><option value="">選択してください</option>${pointOptions("")}</select>
+      <select class="fselect" id="pointSel"><option value="">選択してください</option>${pointOptions("")}${NEW_POINT_OPT}</select>
+      ${npFieldsHtml("np")}
     </div>
     <div class="fgroup"><label class="flabel">日付</label><input class="finput" type="date" id="dateIn" value="${todayStr()}"></div>
     <div class="fgroup"><label class="flabel">水深(m・任意)</label><input class="finput" type="number" id="depthIn" placeholder="例: 18" min="0" max="200" inputmode="decimal"></div>
@@ -932,6 +969,7 @@ function bindPost(fishId) {
   setSeg(fishId ? false : DB.fish.length === 0);
   segOld.addEventListener("click", () => setSeg(false));
   segNew.addEventListener("click", () => setSeg(true));
+  bindNewPoint("pointSel", "np");
 
   let rarity = 3;
   document.querySelectorAll("#rpick button").forEach(b => b.addEventListener("click", () => {
@@ -981,6 +1019,8 @@ function bindPost(fishId) {
     const btn = $("#submitBtn");
     btn.disabled = true; btn.textContent = "保存中…";
     try {
+      payload.pointId = await resolvePointSel("pointSel", "np");
+      if (!payload.pointId) { btn.disabled = false; btn.textContent = "記録を保存する"; return; }
       const fid = await Store.addRecord(payload);
       if (MODE === "live") await reload();
       toast("記録を保存しました");
@@ -1066,7 +1106,8 @@ function viewEditRecord(id) {
   <div class="form">
     <div class="fgroup"><label class="flabel">魚</label><div class="sv">${esc(f ? f.name : "?")}</div></div>
     <div class="fgroup"><label class="flabel">ポイント</label>
-      <select class="fselect" id="erPoint"><option value="">選択してください</option>${pointOptions(r.pointId)}</select>
+      <select class="fselect" id="erPoint"><option value="">選択してください</option>${pointOptions(r.pointId)}${NEW_POINT_OPT}</select>
+      ${npFieldsHtml("enp")}
     </div>
     <div class="fgroup"><label class="flabel">日付</label><input class="finput" type="date" id="erDate" value="${esc(r.date)}"></div>
     <div class="fgroup"><label class="flabel">水深(m・任意)</label><input class="finput" type="number" id="erDepth" value="${esc(r.depth)}" min="0" max="200" inputmode="decimal"></div>
@@ -1087,6 +1128,7 @@ function bindEditRecord(id) {
   const r = DB.records.find(x => String(x.id) === String(id));
   if (!r) return;
   const removeIdx = new Set();
+  bindNewPoint("erPoint", "enp");
   document.querySelectorAll("[data-exdel]").forEach(b => b.addEventListener("click", () => {
     const i = Number(b.dataset.exdel);
     const wrap = b.closest(".pv");
@@ -1115,8 +1157,10 @@ function bindEditRecord(id) {
     if (keepCount + POST_STATE.photos.length > 4) { toast("写真は合計4枚までです"); return; }
     const btn = $("#erSave"); btn.disabled = true; btn.textContent = "保存中…";
     try {
+      const resolvedPointId = await resolvePointSel("erPoint", "enp");
+      if (!resolvedPointId) { btn.disabled = false; btn.textContent = "保存する"; return; }
       await Store.editRecord({
-        recordId: id, pointId, date,
+        recordId: id, pointId: resolvedPointId, date,
         depth: $("#erDepth").value, memo: $("#erMemo").value.trim(),
         removePhotoIds: [...removeIdx].map(i => r.photoIds[i]),
         addPhotos: POST_STATE.photos
@@ -1151,6 +1195,14 @@ function renderTabs(active) {
     else location.hash = b.dataset.href;
   }));
 }
+
+/* iOS Safariのピンチによるページ拡大を無効化。
+ * metaのuser-scalable=noはiOSがピンチに対して無視するため、gestureイベントで直接止める。
+ * 地図の中は除外(Leafletが自前でピンチズームを処理する)。 */
+["gesturestart", "gesturechange"].forEach(t => document.addEventListener(t, (e) => {
+  const el = e.target instanceof Element ? e.target : null;
+  if (!el || !el.closest(".leaflet-container")) e.preventDefault();
+}, { passive: false }));
 
 window.addEventListener("hashchange", route);
 (async function boot() {
