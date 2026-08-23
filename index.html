@@ -150,6 +150,10 @@ select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid va
 .pcredit{position:absolute;left:10px;bottom:10px;background:rgba(18,64,78,.62);color:#fff;font:600 10.5px var(--mono);padding:4px 9px;border-radius:7px}
 .pcount{position:absolute;top:10px;right:10px;background:rgba(18,64,78,.62);color:#fff;font:700 11px var(--mono);padding:4px 9px;border-radius:7px;z-index:2;pointer-events:none}
 .editlink{font:600 11.5px var(--sans);color:var(--aqua-deep);border:1px solid var(--line);border-radius:7px;padding:4px 10px;background:var(--surface);cursor:pointer;white-space:nowrap}
+.kparea{font:600 10px var(--mono);color:var(--faint);letter-spacing:.08em;margin:9px 2px 5px}
+.ptg{display:flex;flex-wrap:wrap;gap:6px}
+.ptgb{font:600 12px var(--sans);color:var(--dim);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:7px 12px;cursor:pointer}
+.ptgb[aria-pressed="true"]{color:#fff;background:var(--aqua);border-color:var(--aqua)}
 
 /* map */
 .viewseg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--surface);box-shadow:var(--shadow)}
@@ -264,7 +268,9 @@ function fishComments(fishId) {
 }
 function derive(f) {
   const recs = fishRecords(f.id);
-  const sites = [...new Set(recs.map(r => pointName(r.pointId)))];
+  // 見られた場所 = 実記録のポイント + 手動追加の「見られるポイント」(knownPointIds)
+  const siteIds = [...new Set([...recs.map(r => String(r.pointId)), ...(f.knownPointIds || []).map(String)])];
+  const sites = siteIds.map(pointName);
   const depths = recs.map(r => parseFloat(r.depth)).filter(n => !isNaN(n));
   const depth = depths.length ? (Math.min(...depths) === Math.max(...depths) ? `${Math.min(...depths)}m` : `${Math.min(...depths)}〜${Math.max(...depths)}m`) : "";
   const seasons = [0, 0, 0, 0]; // 春夏秋冬
@@ -282,9 +288,9 @@ function derive(f) {
 function seedData() {
   const points = POINTS_MASTER.map(p => ({ ...p }));
   const fish = [
-    { id: "f1", name: "クマドリカエルアンコウ", rarity: 5, description: "白ベースに赤の隈取り模様。動かないので撮り放題だが、見つけるのが大変。(サンプルデータ)", by: "サンプル", createdAt: "" },
-    { id: "f2", name: "ハナタツ", rarity: 4, description: "岩肌のヤギに擬態するタツノオトシゴの仲間。(サンプルデータ)", by: "サンプル", createdAt: "" },
-    { id: "f3", name: "キンギョハナダイ", rarity: 1, description: "どこにでも群れているオレンジの定番。群れの写真映えは抜群。(サンプルデータ)", by: "サンプル", createdAt: "" }
+    { id: "f1", name: "クマドリカエルアンコウ", rarity: 5, description: "白ベースに赤の隈取り模様。動かないので撮り放題だが、見つけるのが大変。(サンプルデータ)", knownPointIds: ["izu-futo"], by: "サンプル", createdAt: "" },
+    { id: "f2", name: "ハナタツ", rarity: 4, description: "岩肌のヤギに擬態するタツノオトシゴの仲間。(サンプルデータ)", knownPointIds: [], by: "サンプル", createdAt: "" },
+    { id: "f3", name: "キンギョハナダイ", rarity: 1, description: "どこにでも群れているオレンジの定番。群れの写真映えは抜群。(サンプルデータ)", knownPointIds: [], seasons: ["春", "夏", "秋", "冬"], by: "サンプル", createdAt: "" }
   ];
   const records = [
     { id: "r1", fishId: "f1", pointId: "izu-osezaki-wannai", date: "2025-11-02", depth: "18", memo: "ロープ際の岩の下。ガイド様々。", photoIds: [], by: "サンプル", createdAt: "" },
@@ -314,7 +320,7 @@ const LocalStore = {
     return Promise.resolve(d);
   },
   save() { localStorage.setItem(LS_KEY, JSON.stringify(DB)); },
-  async addFish(p) { const f = { id: uid(), name: p.name, rarity: p.rarity, description: p.description || "", by: myName(), createdAt: todayStr() }; DB.fish.push(f); this.save(); return f.id; },
+  async addFish(p) { const f = { id: uid(), name: p.name, rarity: p.rarity, description: p.description || "", knownPointIds: p.knownPointIds || [], seasons: p.seasons || [], by: myName(), createdAt: todayStr() }; DB.fish.push(f); this.save(); return f.id; },
   async addRecord(p) {
     let fishId = p.fishId;
     if (p.newFish) fishId = await this.addFish(p.newFish);
@@ -326,6 +332,8 @@ const LocalStore = {
     const f = DB.fish.find(x => String(x.id) === String(p.fishId));
     if (!f) throw { code: "notfound" };
     f.name = p.name; f.rarity = p.rarity; f.description = p.description || "";
+    f.knownPointIds = p.knownPointIds || [];
+    f.seasons = p.seasons || [];
     this.save();
   },
   async editRecord(p) {
@@ -345,6 +353,7 @@ const RemoteStore = {
     const j = await res.json();
     if (!j.ok) throw new Error("load failed");
     j.records.forEach(r => { r.photoIds = r.photoIds || []; });
+    j.fish.forEach(f => { f.knownPointIds = f.knownPointIds || []; f.seasons = f.seasons || []; });
     j.points = mergePoints(j.points);
     return j;
   },
@@ -460,11 +469,12 @@ function filteredFish() {
   return DB.fish.filter(f => {
     const d = derive(f);
     if (FILTER.rarity.size && !FILTER.rarity.has(Number(f.rarity))) return false;
-    if (FILTER.point && !d.recs.some(r => String(r.pointId) === FILTER.point)) return false;
+    if (FILTER.point && !d.recs.some(r => String(r.pointId) === FILTER.point)
+        && !(f.knownPointIds || []).map(String).includes(FILTER.point)) return false;
     if (q) {
-      // 名前に加えて エリア>サブエリア>ポイント の全階層でヒットさせる(「八丈島」で島内全ポイントの魚が出る)
-      const paths = [...new Set(d.recs.map(r => pointPath(pointById(r.pointId))))];
-      const hay = (f.name + " " + paths.join(" ")).toLowerCase();
+      // 名前に加えて エリア>サブエリア>ポイント の全階層でヒットさせる(記録+手動追加ポイントの両方)
+      const ids = [...new Set([...d.recs.map(r => String(r.pointId)), ...(f.knownPointIds || []).map(String)])];
+      const hay = (f.name + " " + ids.map(x => pointPath(pointById(x))).join(" ")).toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -555,7 +565,11 @@ function viewFish(id) {
   <div class="summary">
     <div><div class="sk">見られた場所</div><div class="sv">${d.sites.length ? d.sites.map(s => `<span class="site">${esc(s)}</span>`).join(" ") : "—"}</div></div>
     <div><div class="sk">水深</div><div class="sv">${esc(d.depth || "—")}</div></div>
-    <div><div class="sk">季節(記録数)</div>
+    <div><div class="sk">見られる季節</div>
+      <div class="sv">${(f.seasons || []).length === 4 ? `<span class="site">年中</span>`
+        : (f.seasons || []).length ? f.seasons.map(s => `<span class="site">${esc(s)}</span>`).join(" ")
+        : `<span style="color:var(--faint)">未設定(「魚の情報を編集」から)</span>`}</div>
+      <div class="sk" style="margin-top:10px">記録のあった季節</div>
       <div class="seasons">${d.seasons.map((n, i) => `
         <div class="season"><span class="scount">${n || ""}</span><div class="sbar ${n ? "on" : ""}" style="height:${Math.round(n / maxSeason * 34) + 2}px"></div><span class="slabel">${seasonNames[i]}</span></div>`).join("")}
       </div>
@@ -699,7 +713,8 @@ function speciesAtPoint(pid) {
   return DB.fish.filter(f => {
     if (FILTER.rarity.size && !FILTER.rarity.has(Number(f.rarity))) return false;
     if (q && !pathHit && !String(f.name).toLowerCase().includes(q)) return false;
-    return fishRecords(f.id).some(r => String(r.pointId) === String(pid));
+    return fishRecords(f.id).some(r => String(r.pointId) === String(pid))
+      || (f.knownPointIds || []).map(String).includes(String(pid));
   });
 }
 
@@ -1000,6 +1015,18 @@ function viewEditFish(id) {
       <div class="rpick" id="rpick">${[1, 2, 3, 4, 5].map(n => `<button type="button" data-r="${n}" aria-pressed="${n === Number(f.rarity)}">${"★".repeat(n)}</button>`).join("")}</div>
     </div>
     <div class="fgroup"><label class="flabel">プチ解説(任意)</label><textarea class="ftext" id="efDesc">${esc(f.description || "")}</textarea></div>
+    <div class="fgroup"><label class="flabel">見られる季節(複数可・4つ全部=年中)</label>
+      <div class="ptg">${["春", "夏", "秋", "冬"].map(s =>
+        `<button type="button" class="ptgb" data-ss="${s}" aria-pressed="${(f.seasons || []).includes(s)}">${s}</button>`).join("")}</div>
+    </div>
+    <div class="fgroup"><label class="flabel">見られるポイント(複数可・記録が無い場所も追加できる)</label>
+      <div id="kpWrap">${[...new Set(DB.points.map(p => p.area))].map(a => `
+        <div class="kparea">${esc(a)}</div>
+        <div class="ptg">${DB.points.filter(p => p.area === a).map(p =>
+          `<button type="button" class="ptgb" data-kp="${esc(p.id)}" aria-pressed="${(f.knownPointIds || []).map(String).includes(String(p.id))}">${esc(pointLabel(p))}</button>`).join("")}</div>`).join("")}
+      </div>
+      <div class="fnote" style="font:500 10.5px var(--mono);color:var(--faint)">記録があるポイントは自動で表示されます。ここは「他でも見られる」情報の追加用。</div>
+    </div>
     <button class="submit" id="efSave">保存する</button>
   </div>`;
 }
@@ -1012,12 +1039,17 @@ function bindEditFish(id) {
     rarity = Number(b.dataset.r);
     document.querySelectorAll("#rpick button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
   }));
+  document.querySelectorAll(".ptgb").forEach(b => b.addEventListener("click", () => {
+    b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true"));
+  }));
   $("#efSave").addEventListener("click", async () => {
     const name = $("#efName").value.trim();
     if (!name) { toast("名前を入れてください"); return; }
+    const knownPointIds = [...document.querySelectorAll('.ptgb[data-kp][aria-pressed="true"]')].map(b => b.dataset.kp);
+    const seasons = [...document.querySelectorAll('.ptgb[data-ss][aria-pressed="true"]')].map(b => b.dataset.ss);
     const btn = $("#efSave"); btn.disabled = true; btn.textContent = "保存中…";
     try {
-      await Store.editFish({ fishId: id, name, rarity, description: $("#efDesc").value.trim() });
+      await Store.editFish({ fishId: id, name, rarity, description: $("#efDesc").value.trim(), knownPointIds, seasons });
       if (MODE === "live") await reload();
       toast("保存しました");
       location.hash = "#/fish/" + encodeURIComponent(id);

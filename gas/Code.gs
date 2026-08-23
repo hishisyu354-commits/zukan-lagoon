@@ -23,8 +23,10 @@
 
 var PROPS = PropertiesService.getScriptProperties();
 
+var VERSION = "v3"; // ping応答に含める。フロント/Claudeが反映確認に使う
+
 var SHEET_DEFS = {
-  fish:     ["id", "name", "rarity", "description", "createdByName", "createdByToken", "createdAt"],
+  fish:     ["id", "name", "rarity", "description", "knownPointIds", "seasons", "createdByName", "createdByToken", "createdAt"],
   records:  ["id", "fishId", "pointId", "date", "depth", "memo", "photoIds", "userName", "token", "createdAt"],
   comments: ["id", "targetType", "targetId", "text", "userName", "token", "createdAt"],
   points:   ["id", "area", "subarea", "name", "lat", "lng"],
@@ -160,6 +162,35 @@ function updateRowById_(name, id, patch) {
   return false;
 }
 
+// 稼働中のシートに足りない列(後から追加した定義)をヘッダー行へ自動追記する
+function ensureColumns_(name) {
+  var sh = ss_().getSheetByName(name);
+  var head = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(String);
+  SHEET_DEFS[name].forEach(function (h) {
+    if (head.indexOf(h) < 0) {
+      sh.getRange(1, head.length + 1).setValue(h);
+      head.push(h);
+    }
+  });
+}
+
+// 見られる季節を正規化(春夏秋冬のみ・重複除去)。記録日付の分布とは別の「宣言」情報
+function normalizeSeasons_(v) {
+  var ok = ["春", "夏", "秋", "冬"];
+  var seen = {};
+  return (v || []).map(String).filter(function (x) {
+    return ok.indexOf(x) >= 0 && !seen[x] && (seen[x] = true);
+  }).join(",");
+}
+
+// ポイントid配列を正規化(文字列化・空除去・重複除去・上限30)
+function normalizePointIds_(v) {
+  var seen = {};
+  return (v || []).map(function (x) { return String(x || "").trim(); })
+    .filter(function (x) { return x && !seen[x] && (seen[x] = true); })
+    .slice(0, 30).join(",");
+}
+
 // base64写真をDriveに保存してid配列を返す。maxCountで上限を切る
 function savePhotoList_(photos, maxCount) {
   var ids = [];
@@ -181,11 +212,14 @@ function savePhotoList_(photos, maxCount) {
 
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) || "all";
-  if (action === "ping") return json_({ ok: true, ts: new Date().toISOString() });
+  if (action === "ping") return json_({ ok: true, ts: new Date().toISOString(), ver: VERSION });
 
   // 公開ペイロード: トークン列は落とす(§プライバシー/なりすまし防止)
   var fish = readAll_("fish").map(function (f) {
-    return { id: f.id, name: f.name, rarity: Number(f.rarity) || 0, description: f.description, by: f.createdByName, createdAt: f.createdAt };
+    return { id: f.id, name: f.name, rarity: Number(f.rarity) || 0, description: f.description,
+             knownPointIds: String(f.knownPointIds || "").split(",").filter(String),
+             seasons: String(f.seasons || "").split(",").filter(String),
+             by: f.createdByName, createdAt: f.createdAt };
   });
   var records = readAll_("records").map(function (r) {
     return { id: r.id, fishId: r.fishId, pointId: r.pointId, date: fmtDate_(r.date), depth: r.depth, memo: r.memo,
@@ -290,10 +324,13 @@ function addFish_(req, auth) {
   var name = clip_(req.name, LIMITS.maxNameLen);
   var rarity = Math.max(1, Math.min(5, Number(req.rarity) || 1));
   if (!name) return json_({ ok: false, code: "validation", message: "名前は必須" });
+  ensureColumns_("fish");
   var id = Utilities.getUuid();
   appendRow_("fish", {
     id: id, name: name, rarity: rarity,
     description: clip_(req.description, LIMITS.maxTextLen),
+    knownPointIds: normalizePointIds_(req.knownPointIds),
+    seasons: normalizeSeasons_(req.seasons),
     createdByName: auth.name, createdByToken: auth.token, createdAt: now_()
   });
   return json_({ ok: true, id: id });
@@ -345,10 +382,13 @@ function editFish_(req, auth) {
   if (!f) return json_({ ok: false, code: "notfound" });
   var name = clip_(req.name, LIMITS.maxNameLen);
   if (!name) return json_({ ok: false, code: "validation", message: "名前は必須" });
+  ensureColumns_("fish");
   updateRowById_("fish", f.id, {
     name: name,
     rarity: Math.max(1, Math.min(5, Number(req.rarity) || 1)),
-    description: clip_(req.description, LIMITS.maxTextLen)
+    description: clip_(req.description, LIMITS.maxTextLen),
+    knownPointIds: normalizePointIds_(req.knownPointIds),
+    seasons: normalizeSeasons_(req.seasons)
   });
   return json_({ ok: true });
 }
