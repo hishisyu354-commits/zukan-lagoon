@@ -140,6 +140,43 @@ function findMember_(token) {
   return readAll_("members").filter(function (m) { return String(m.token) === String(token); })[0] || null;
 }
 
+function getRowById_(name, id) {
+  return readAll_(name).filter(function (r) { return String(r.id) === String(id); })[0] || null;
+}
+
+function updateRowById_(name, id, patch) {
+  var sh = ss_().getSheetByName(name);
+  var vals = sh.getDataRange().getValues();
+  var head = vals[0];
+  for (var i = 1; i < vals.length; i++) {
+    if (String(vals[i][0]) === String(id)) {
+      Object.keys(patch).forEach(function (k) {
+        var col = head.indexOf(k);
+        if (col >= 0) sh.getRange(i + 1, col + 1).setValue(patch[k]);
+      });
+      return true;
+    }
+  }
+  return false;
+}
+
+// base64写真をDriveに保存してid配列を返す。maxCountで上限を切る
+function savePhotoList_(photos, maxCount) {
+  var ids = [];
+  var list = (photos || []).slice(0, Math.max(0, maxCount));
+  for (var i = 0; i < list.length; i++) {
+    var p = list[i];
+    if (!p || !p.b64) continue;
+    if (p.b64.length > LIMITS.maxPhotoBase64Bytes * 1.4) return { error: "photo_too_large" };
+    var blob = Utilities.newBlob(Utilities.base64Decode(p.b64), p.mime || "image/jpeg",
+      "zukan-" + Utilities.getUuid() + ".jpg");
+    var file = DriveApp.getFolderById(PROPS.getProperty("PHOTO_FOLDER_ID")).createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    ids.push(file.getId());
+  }
+  return { ids: ids };
+}
+
 /* ---------------- 公開読み取りAPI ---------------- */
 
 function doGet(e) {
@@ -241,6 +278,8 @@ function doPost(e) {
     if (req.action === "addFish")    return addFish_(req, auth);
     if (req.action === "addRecord")  return addRecord_(req, auth);
     if (req.action === "addComment") return addComment_(req, auth);
+    if (req.action === "editFish")   return editFish_(req, auth);
+    if (req.action === "editRecord") return editRecord_(req, auth, me.status === "owner");
     return json_({ ok: false, code: "unknown_action" });
   } finally {
     lock.releaseLock();
@@ -270,18 +309,9 @@ function addRecord_(req, auth) {
   if (!fishId) return json_({ ok: false, code: "validation", message: "魚が未指定" });
   if (!req.pointId) return json_({ ok: false, code: "validation", message: "ポイントが未指定" });
 
-  var photos = (req.photos || []).slice(0, LIMITS.maxPhotosPerRecord);
-  var photoIds = [];
-  for (var i = 0; i < photos.length; i++) {
-    var p = photos[i];
-    if (!p || !p.b64) continue;
-    if (p.b64.length > LIMITS.maxPhotoBase64Bytes * 1.4) return json_({ ok: false, code: "photo_too_large" });
-    var blob = Utilities.newBlob(Utilities.base64Decode(p.b64), p.mime || "image/jpeg",
-      "zukan-" + Utilities.getUuid() + ".jpg");
-    var file = DriveApp.getFolderById(PROPS.getProperty("PHOTO_FOLDER_ID")).createFile(blob);
-    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    photoIds.push(file.getId());
-  }
+  var saved = savePhotoList_(req.photos, LIMITS.maxPhotosPerRecord);
+  if (saved.error) return json_({ ok: false, code: saved.error });
+  var photoIds = saved.ids;
 
   var id = Utilities.getUuid();
   appendRow_("records", {
@@ -305,6 +335,54 @@ function addComment_(req, auth) {
     userName: auth.name, token: auth.token, createdAt: now_()
   });
   return json_({ ok: true, id: id });
+}
+
+/* ---------------- 編集API ---------------- */
+
+// 魚の情報はメンバー全員で共同編集できる(名前の表記ゆれ・レア度の合議を想定)
+function editFish_(req, auth) {
+  var f = getRowById_("fish", String(req.fishId || ""));
+  if (!f) return json_({ ok: false, code: "notfound" });
+  var name = clip_(req.name, LIMITS.maxNameLen);
+  if (!name) return json_({ ok: false, code: "validation", message: "名前は必須" });
+  updateRowById_("fish", f.id, {
+    name: name,
+    rarity: Math.max(1, Math.min(5, Number(req.rarity) || 1)),
+    description: clip_(req.description, LIMITS.maxTextLen)
+  });
+  return json_({ ok: true });
+}
+
+// 発見記録は投稿した本人(同じトークン)かオーナーだけが編集できる
+function editRecord_(req, auth, isOwner) {
+  var r = getRowById_("records", String(req.recordId || ""));
+  if (!r) return json_({ ok: false, code: "notfound" });
+  if (String(r.token) !== auth.token && !isOwner) {
+    return json_({ ok: false, code: "forbidden", message: "自分の投稿だけ編集できます" });
+  }
+  if (!req.pointId) return json_({ ok: false, code: "validation", message: "ポイントが未指定" });
+  if (!req.date) return json_({ ok: false, code: "validation", message: "日付が未指定" });
+
+  var keep = String(r.photoIds || "").split(",").filter(String);
+  var removeIds = req.removePhotoIds || [];
+  if (removeIds.length) {
+    keep = keep.filter(function (pid) { return removeIds.indexOf(pid) < 0; });
+    removeIds.forEach(function (pid) {
+      try { DriveApp.getFileById(pid).setTrashed(true); } catch (e) { /* 既に無い等は無視 */ }
+    });
+  }
+  var saved = savePhotoList_(req.addPhotos, LIMITS.maxPhotosPerRecord - keep.length);
+  if (saved.error) return json_({ ok: false, code: saved.error });
+  keep = keep.concat(saved.ids);
+
+  updateRowById_("records", r.id, {
+    pointId: String(req.pointId),
+    date: clip_(req.date, 10),
+    depth: clip_(req.depth, 10),
+    memo: clip_(req.memo, LIMITS.maxTextLen),
+    photoIds: keep.join(",")
+  });
+  return json_({ ok: true, photoIds: keep });
 }
 
 /* ---------------- 小物 ---------------- */

@@ -142,6 +142,15 @@ select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid va
 .toast{position:fixed;left:50%;bottom:calc(88px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--navy);border:1px solid var(--navy);color:#fff;font:600 12.5px var(--sans);padding:11px 18px;border-radius:10px;z-index:40;opacity:0;transition:opacity .2s;pointer-events:none;max-width:86vw;text-align:center;box-shadow:0 4px 14px rgba(18,64,78,.25)}
 .toast.show{opacity:1}
 
+/* 写真カルーセル(全投稿者の写真をクレジット付きで) */
+.hero{position:relative}
+.pswipe{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.pswipe::-webkit-scrollbar{display:none}
+.pslide{flex:0 0 100%;scroll-snap-align:center;position:relative}
+.pcredit{position:absolute;left:10px;bottom:10px;background:rgba(18,64,78,.62);color:#fff;font:600 10.5px var(--mono);padding:4px 9px;border-radius:7px}
+.pcount{position:absolute;top:10px;right:10px;background:rgba(18,64,78,.62);color:#fff;font:700 11px var(--mono);padding:4px 9px;border-radius:7px;z-index:2;pointer-events:none}
+.editlink{font:600 11.5px var(--sans);color:var(--aqua-deep);border:1px solid var(--line);border-radius:7px;padding:4px 10px;background:var(--surface);cursor:pointer;white-space:nowrap}
+
 /* map */
 .viewseg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--surface);box-shadow:var(--shadow)}
 .viewseg button{flex:1;font:600 13px var(--sans);padding:9px;border:none;background:transparent;color:var(--dim);cursor:pointer}
@@ -264,7 +273,8 @@ function derive(f) {
     if (!m) return;
     seasons[m >= 3 && m <= 5 ? 0 : m >= 6 && m <= 8 ? 1 : m >= 9 && m <= 11 ? 2 : 3]++;
   });
-  const photos = recs.flatMap(r => r.photoIds || []);
+  // 写真は「誰が撮ったか」を持たせ、全投稿者分を新しい順に並べる(代表1枚に絞らない=公平性)
+  const photos = recs.flatMap(r => (r.photoIds || []).map(pid => ({ id: pid, by: r.by, date: r.date })));
   return { recs, sites, depth, seasons, photos };
 }
 
@@ -311,7 +321,21 @@ const LocalStore = {
     DB.records.push({ id: uid(), fishId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo || "", photoIds: (p.photos || []).map(x => x.dataUrl), by: myName(), createdAt: todayStr() });
     this.save(); return fishId;
   },
-  async addComment(p) { DB.comments.push({ id: uid(), targetType: p.targetType, targetId: p.targetId, text: p.text, by: myName(), createdAt: todayStr() }); this.save(); }
+  async addComment(p) { DB.comments.push({ id: uid(), targetType: p.targetType, targetId: p.targetId, text: p.text, by: myName(), createdAt: todayStr() }); this.save(); },
+  async editFish(p) {
+    const f = DB.fish.find(x => String(x.id) === String(p.fishId));
+    if (!f) throw { code: "notfound" };
+    f.name = p.name; f.rarity = p.rarity; f.description = p.description || "";
+    this.save();
+  },
+  async editRecord(p) {
+    const r = DB.records.find(x => String(x.id) === String(p.recordId));
+    if (!r) throw { code: "notfound" };
+    const remove = new Set(p.removePhotoIds || []);
+    r.pointId = p.pointId; r.date = p.date; r.depth = p.depth; r.memo = p.memo || "";
+    r.photoIds = (r.photoIds || []).filter(x => !remove.has(x)).concat((p.addPhotos || []).map(x => x.dataUrl));
+    this.save();
+  }
 };
 
 /* ================= リモートストア(GAS) ================= */
@@ -339,7 +363,13 @@ const RemoteStore = {
     const payload = { fishId: p.fishId, newFish: p.newFish, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo, photos: (p.photos || []).map(x => ({ b64: x.b64, mime: x.mime })) };
     return (await this.post("addRecord", payload)).fishId;
   },
-  async addComment(p) { return this.post("addComment", p); }
+  async addComment(p) { return this.post("addComment", p); },
+  async editFish(p) { return this.post("editFish", p); },
+  async editRecord(p) {
+    const payload = { recordId: p.recordId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo,
+      removePhotoIds: p.removePhotoIds || [], addPhotos: (p.addPhotos || []).map(x => ({ b64: x.b64, mime: x.mime })) };
+    return this.post("editRecord", payload);
+  }
 };
 const Store = MODE === "live" ? RemoteStore : LocalStore;
 
@@ -377,6 +407,10 @@ function handleApiError(err) {
     toast("オーナーコードが違います");
   } else if (err.code === "photo_too_large") {
     toast("写真が大きすぎます(枚数を減らすか撮り直してください)");
+  } else if (err.code === "unknown_action") {
+    toast("サーバー側の更新が必要です(Code.gsを貼り直して「新バージョン」でデプロイ)");
+  } else if (err.code === "notfound") {
+    toast("対象が見つかりません(再読み込みして試してください)");
   } else {
     toast(err.message || "エラー: " + (err.code || "unknown"));
   }
@@ -479,7 +513,7 @@ function cardHtml(f) {
   const siteChips = d.sites.slice(0, 2).map(s => `<span class="site">${esc(s)}</span>`).join("")
     + (d.sites.length > 2 ? `<span class="site">+${d.sites.length - 2}</span>` : "");
   return `<div class="card" onclick="location.hash='#/fish/${esc(f.id)}'">
-    <div class="ph">${ph ? `<img src="${esc(photoSrc(ph, 600))}" loading="lazy" alt="">` : FISH_SVG}</div>
+    <div class="ph">${ph ? `<img src="${esc(photoSrc(ph.id, 600))}" loading="lazy" alt="">` : FISH_SVG}</div>
     <div class="cbody">
       <div class="cname">${esc(f.name)}</div>
       ${stars(f.rarity)}
@@ -496,14 +530,24 @@ function viewFish(id) {
   const cms = fishComments(f.id);
   const maxSeason = Math.max(1, ...d.seasons);
   const seasonNames = ["春", "夏", "秋", "冬"];
+  const meName = AUTH.name || myName();
+  const canEditRec = (r) => AUTH.status === "owner" || (!!meName && r.by === meName);
   return `
   <span class="back" onclick="history.back()">← 図鑑へ戻る</span>
-  <div class="hero"><div class="ph">${d.photos[0] ? `<img src="${esc(photoSrc(d.photos[0], 1400))}" alt="">` : FISH_SVG}</div></div>
+  <div class="hero">
+    ${d.photos.length ? `
+    <div class="pswipe" id="pswipe">
+      ${d.photos.map(p => `<div class="pslide"><div class="ph"><img src="${esc(photoSrc(p.id, 1400))}" loading="lazy" alt=""></div><span class="pcredit">撮影: ${esc(p.by || "?")}${p.date ? " ・ " + esc(p.date) : ""}</span></div>`).join("")}
+    </div>
+    ${d.photos.length > 1 ? `<span class="pcount" id="pcount">1/${d.photos.length}</span>` : ""}`
+    : `<div class="ph">${FISH_SVG}</div>`}
+  </div>
   <div class="dhead">
     <div>
       <div class="dname">${esc(f.name)}</div>
       ${stars(f.rarity)}
       <div class="dby">登録: ${esc(f.by || "?")}</div>
+      <div style="margin-top:8px"><button class="editlink" id="editFishBtn">魚の情報を編集</button></div>
     </div>
     <span class="rtag" style="color:${rcolor(f.rarity)};border-color:${rcolor(f.rarity)}">レア度 ${esc(f.rarity)}</span>
   </div>
@@ -529,6 +573,7 @@ function viewFish(id) {
         <div class="rtop"><span class="rpoint">${esc(pointName(r.pointId))}</span><span class="rdate">${esc(r.date)}</span></div>
         <div class="rmeta">${r.depth ? esc(r.depth) + "m ・ " : ""}${esc(r.by || "?")}</div>
         ${r.memo ? `<div class="rmemo">${esc(r.memo)}</div>` : ""}
+        ${canEditRec(r) ? `<div style="margin-top:7px"><button class="editlink" data-editrec="${esc(r.id)}">この記録を編集</button></div>` : ""}
       </div>
     </div>`).join("") || `<div class="empty">まだ記録がありません</div>`}
   <div class="h2">コメント ${cms.length}件</div>
@@ -774,6 +819,13 @@ function route() {
   } else if (page === "setup") {
     app.innerHTML = viewSetup();
     bindSetup();
+  } else if (page === "editfish" && arg) {
+    app.innerHTML = viewEditFish(decodeURIComponent(arg));
+    bindEditFish(decodeURIComponent(arg));
+  } else if (page === "editrec" && arg) {
+    POST_STATE.photos = [];
+    app.innerHTML = viewEditRecord(decodeURIComponent(arg));
+    bindEditRecord(decodeURIComponent(arg));
   } else if (page === "fish" && arg) {
     app.innerHTML = viewFish(decodeURIComponent(arg));
     bindFish(decodeURIComponent(arg));
@@ -820,6 +872,17 @@ function refreshListOnly() {
 }
 
 function bindFish(id) {
+  const sw = $("#pswipe");
+  if (sw) sw.addEventListener("scroll", () => {
+    const i = Math.min(sw.children.length, Math.round(sw.scrollLeft / sw.clientWidth) + 1);
+    const pc = $("#pcount");
+    if (pc) pc.textContent = i + "/" + sw.children.length;
+  }, { passive: true });
+  const efb = $("#editFishBtn");
+  if (efb) efb.addEventListener("click", () => { location.hash = "#/editfish/" + encodeURIComponent(id); });
+  document.querySelectorAll("[data-editrec]").forEach(b => b.addEventListener("click", () => {
+    location.hash = "#/editrec/" + encodeURIComponent(b.dataset.editrec);
+  }));
   $("#shareBtn").addEventListener("click", () => {
     const f = DB.fish.find(x => String(x.id) === String(id));
     if (f) shareFish(f);
@@ -923,6 +986,114 @@ function renderPreviews() {
     POST_STATE.photos.splice(Number(b.dataset.del), 1);
     renderPreviews();
   }));
+}
+
+/* ================= 編集(魚=共同編集 / 記録=本人+オーナー) ================= */
+function viewEditFish(id) {
+  const f = DB.fish.find(x => String(x.id) === String(id));
+  if (!f) return `<div class="empty">この魚は見つかりません</div>`;
+  return `
+  <span class="back" onclick="history.back()">← 戻る</span>
+  <div class="form">
+    <div class="fgroup"><label class="flabel">名前</label><input class="finput" id="efName" maxlength="60" value="${esc(f.name)}"></div>
+    <div class="fgroup"><label class="flabel">レア度</label>
+      <div class="rpick" id="rpick">${[1, 2, 3, 4, 5].map(n => `<button type="button" data-r="${n}" aria-pressed="${n === Number(f.rarity)}">${"★".repeat(n)}</button>`).join("")}</div>
+    </div>
+    <div class="fgroup"><label class="flabel">プチ解説(任意)</label><textarea class="ftext" id="efDesc">${esc(f.description || "")}</textarea></div>
+    <button class="submit" id="efSave">保存する</button>
+  </div>`;
+}
+
+function bindEditFish(id) {
+  const f = DB.fish.find(x => String(x.id) === String(id));
+  if (!f) return;
+  let rarity = Math.max(1, Math.min(5, Number(f.rarity) || 3));
+  document.querySelectorAll("#rpick button").forEach(b => b.addEventListener("click", () => {
+    rarity = Number(b.dataset.r);
+    document.querySelectorAll("#rpick button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  }));
+  $("#efSave").addEventListener("click", async () => {
+    const name = $("#efName").value.trim();
+    if (!name) { toast("名前を入れてください"); return; }
+    const btn = $("#efSave"); btn.disabled = true; btn.textContent = "保存中…";
+    try {
+      await Store.editFish({ fishId: id, name, rarity, description: $("#efDesc").value.trim() });
+      if (MODE === "live") await reload();
+      toast("保存しました");
+      location.hash = "#/fish/" + encodeURIComponent(id);
+    } catch (e) { handleApiError(e); btn.disabled = false; btn.textContent = "保存する"; }
+  });
+}
+
+function viewEditRecord(id) {
+  const r = DB.records.find(x => String(x.id) === String(id));
+  if (!r) return `<div class="empty">この記録は見つかりません</div>`;
+  const f = DB.fish.find(x => String(x.id) === String(r.fishId));
+  return `
+  <span class="back" onclick="history.back()">← 戻る</span>
+  <div class="form">
+    <div class="fgroup"><label class="flabel">魚</label><div class="sv">${esc(f ? f.name : "?")}</div></div>
+    <div class="fgroup"><label class="flabel">ポイント</label>
+      <select class="fselect" id="erPoint"><option value="">選択してください</option>${pointOptions(r.pointId)}</select>
+    </div>
+    <div class="fgroup"><label class="flabel">日付</label><input class="finput" type="date" id="erDate" value="${esc(r.date)}"></div>
+    <div class="fgroup"><label class="flabel">水深(m・任意)</label><input class="finput" type="number" id="erDepth" value="${esc(r.depth)}" min="0" max="200" inputmode="decimal"></div>
+    <div class="fgroup"><label class="flabel">ひとことメモ(任意)</label><textarea class="ftext" id="erMemo">${esc(r.memo || "")}</textarea></div>
+    <div class="fgroup"><label class="flabel">いまの写真(×で削除指定)</label>
+      <div class="previews">${(r.photoIds || []).map((p, i) => `<div class="pv"><img src="${esc(photoSrc(p, 300))}" alt=""><button type="button" data-exdel="${i}">×</button></div>`).join("") || `<span style="font:500 11px var(--mono);color:var(--faint)">なし</span>`}</div>
+    </div>
+    <div class="fgroup"><label class="flabel">写真を追加(合計4枚まで)</label>
+      <div class="previews" id="previews"></div>
+      <button type="button" class="filebtn" id="fileBtn">写真を選ぶ</button>
+      <input type="file" id="fileIn" accept="image/*" multiple style="display:none">
+    </div>
+    <button class="submit" id="erSave">保存する</button>
+  </div>`;
+}
+
+function bindEditRecord(id) {
+  const r = DB.records.find(x => String(x.id) === String(id));
+  if (!r) return;
+  const removeIdx = new Set();
+  document.querySelectorAll("[data-exdel]").forEach(b => b.addEventListener("click", () => {
+    const i = Number(b.dataset.exdel);
+    const wrap = b.closest(".pv");
+    if (removeIdx.has(i)) { removeIdx.delete(i); wrap.style.opacity = ""; b.textContent = "×"; }
+    else { removeIdx.add(i); wrap.style.opacity = ".3"; b.textContent = "↺"; }
+  }));
+  $("#fileBtn").addEventListener("click", () => $("#fileIn").click());
+  $("#fileIn").addEventListener("change", async (e) => {
+    const files = [...e.target.files];
+    for (const file of files) {
+      try {
+        const p = await compressImage(file, MODE === "live" ? 1600 : 900, MODE === "live" ? 0.82 : 0.7);
+        POST_STATE.photos.push(p);
+      } catch (err) { toast("読み込めない画像がありました"); }
+    }
+    e.target.value = "";
+    renderPreviews();
+  });
+  renderPreviews();
+  $("#erSave").addEventListener("click", async () => {
+    const pointId = $("#erPoint").value;
+    const date = $("#erDate").value;
+    if (!pointId) { toast("ポイントを選んでください"); return; }
+    if (!date) { toast("日付を入れてください"); return; }
+    const keepCount = (r.photoIds || []).length - removeIdx.size;
+    if (keepCount + POST_STATE.photos.length > 4) { toast("写真は合計4枚までです"); return; }
+    const btn = $("#erSave"); btn.disabled = true; btn.textContent = "保存中…";
+    try {
+      await Store.editRecord({
+        recordId: id, pointId, date,
+        depth: $("#erDepth").value, memo: $("#erMemo").value.trim(),
+        removePhotoIds: [...removeIdx].map(i => r.photoIds[i]),
+        addPhotos: POST_STATE.photos
+      });
+      if (MODE === "live") await reload();
+      toast("保存しました");
+      location.hash = "#/fish/" + encodeURIComponent(r.fishId);
+    } catch (e) { handleApiError(e); btn.disabled = false; btn.textContent = "保存する"; }
+  });
 }
 
 function bindAdmin() {
