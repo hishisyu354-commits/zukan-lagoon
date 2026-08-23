@@ -23,7 +23,7 @@
 
 var PROPS = PropertiesService.getScriptProperties();
 
-var VERSION = "v5"; // ping応答に含める。フロント/Claudeが反映確認に使う
+var VERSION = "v6"; // ping応答に含める。フロント/Claudeが反映確認に使う
 
 // リアクションの許可セット(フロントのRX_SETと一致させる)
 var REACTIONS = ["👍", "❤️", "🤩", "📸", "🤿"];
@@ -34,7 +34,8 @@ var SHEET_DEFS = {
   comments: ["id", "targetType", "targetId", "text", "userName", "token", "createdAt"],
   points:   ["id", "area", "subarea", "name", "lat", "lng"],
   members:  ["token", "displayName", "status", "requestedAt", "updatedAt"],
-  reactions: ["id", "targetType", "targetId", "emoji", "userName", "token", "createdAt"]
+  reactions: ["id", "targetType", "targetId", "emoji", "userName", "token", "createdAt"],
+  logs: ["id", "diveNo", "date", "pointId", "duration", "maxDepth", "waterTemp", "visibility", "weather", "buddy", "memo", "userName", "token", "createdAt"]
 };
 
 // 初期ポイント(新規setup時のみ使用)。階層=エリア>サブエリア>ポイント。緯度経度はおおよそ。
@@ -182,9 +183,9 @@ function ensureSheet_(name) {
   return sh;
 }
 
-// 稼働中のシートに足りない列(後から追加した定義)をヘッダー行へ自動追記する
+// 稼働中のシートに足りない列(後から追加した定義)をヘッダー行へ自動追記する。シート自体が無ければ作る
 function ensureColumns_(name) {
-  var sh = ss_().getSheetByName(name);
+  var sh = ensureSheet_(name);
   var head = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(String);
   SHEET_DEFS[name].forEach(function (h) {
     if (head.indexOf(h) < 0) {
@@ -252,7 +253,12 @@ function doGet(e) {
   var reactions = readAll_("reactions").map(function (r) {
     return { targetType: r.targetType, targetId: r.targetId, emoji: r.emoji, by: r.userName, createdAt: r.createdAt };
   });
-  return json_({ ok: true, fish: fish, records: records, comments: comments, points: points, reactions: reactions });
+  var logs = readAll_("logs").map(function (l) {
+    return { id: l.id, diveNo: l.diveNo, date: fmtDate_(l.date), pointId: l.pointId, duration: l.duration,
+             maxDepth: l.maxDepth, waterTemp: l.waterTemp, visibility: l.visibility, weather: l.weather,
+             buddy: l.buddy, memo: l.memo, by: l.userName, createdAt: l.createdAt };
+  });
+  return json_({ ok: true, fish: fish, records: records, comments: comments, points: points, reactions: reactions, logs: logs });
 }
 
 function fmtDate_(v) {
@@ -337,6 +343,8 @@ function doPost(e) {
     if (req.action === "addComment") return addComment_(req, auth);
     if (req.action === "addPoint")   return addPoint_(req, auth);
     if (req.action === "toggleReaction") return toggleReaction_(req, auth);
+    if (req.action === "addLog")     return addLog_(req, auth);
+    if (req.action === "editLog")    return editLog_(req, auth, me.status === "owner");
     if (req.action === "editFish")   return editFish_(req, auth);
     if (req.action === "editRecord") return editRecord_(req, auth, me.status === "owner");
     return json_({ ok: false, code: "unknown_action" });
@@ -417,7 +425,7 @@ function addPoint_(req, auth) {
 // リアクションのトグル。同じ人(トークン)×同じ対象×同じ絵文字は1つまで。
 // 2回目のタップで自分の行だけを削除する(他人の行は消せない)
 function toggleReaction_(req, auth) {
-  var tt = req.targetType === "record" ? "record" : "fish";
+  var tt = ["fish", "record", "log"].indexOf(String(req.targetType)) >= 0 ? String(req.targetType) : "fish";
   var tid = String(req.targetId || "");
   var emoji = String(req.emoji || "");
   if (!tid) return json_({ ok: false, code: "validation", message: "対象が未指定" });
@@ -443,6 +451,48 @@ function toggleReaction_(req, auth) {
     userName: auth.name, token: auth.token, createdAt: now_()
   });
   return json_({ ok: true, state: "added", count: count + 1 });
+}
+
+/* ---------------- ログAPI ---------------- */
+
+function logFields_(req) {
+  return {
+    diveNo: clip_(String(req.diveNo || "").trim(), 6),
+    date: clip_(req.date, 10),
+    pointId: String(req.pointId || ""),
+    duration: clip_(String(req.duration || "").trim(), 6),
+    maxDepth: clip_(String(req.maxDepth || "").trim(), 6),
+    waterTemp: clip_(String(req.waterTemp || "").trim(), 6),
+    visibility: clip_(String(req.visibility || "").trim(), 10),
+    weather: clip_(String(req.weather || "").trim(), 20),
+    buddy: clip_(String(req.buddy || "").trim(), 60),
+    memo: clip_(req.memo, LIMITS.maxTextLen)
+  };
+}
+
+function addLog_(req, auth) {
+  var f = logFields_(req);
+  if (!f.date) return json_({ ok: false, code: "validation", message: "日付は必須" });
+  if (!f.pointId) return json_({ ok: false, code: "validation", message: "ポイントは必須" });
+  var id = Utilities.getUuid();
+  f.id = id; f.userName = auth.name; f.token = auth.token; f.createdAt = now_();
+  appendRow_("logs", f);
+  return json_({ ok: true, id: id });
+}
+
+// ログの編集は書いた本人(同じトークン)かオーナーのみ
+function editLog_(req, auth, isOwner) {
+  var l = getRowById_("logs", String(req.logId || ""));
+  if (!l) return json_({ ok: false, code: "notfound" });
+  if (String(l.token) !== auth.token && !isOwner) {
+    return json_({ ok: false, code: "forbidden", message: "自分のログだけ編集できます" });
+  }
+  var f = logFields_(req);
+  if (!f.date) return json_({ ok: false, code: "validation", message: "日付は必須" });
+  if (!f.pointId) return json_({ ok: false, code: "validation", message: "ポイントは必須" });
+  ensureColumns_("logs");
+  updateRowById_("logs", l.id, f);
+  return json_({ ok: true });
 }
 
 /* ---------------- 編集API ---------------- */

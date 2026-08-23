@@ -164,6 +164,14 @@ select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid va
 .rxbar.small .rx .n{font-size:10px;margin-left:4px}
 .rxwho{font:500 11px var(--sans);color:var(--faint);line-height:1.7;margin:6px 2px 0;word-break:break-word}
 
+/* ダイビングログ */
+.loghead{display:flex;gap:8px;align-items:center;margin:14px 0 8px}
+.logrow{display:flex;gap:11px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:8px;cursor:pointer;box-shadow:var(--shadow)}
+.logrow:hover{border-color:#a9d6dd}
+.lno{font:700 11.5px var(--mono);color:var(--aqua-deep);white-space:nowrap;min-width:48px}
+.logsummary{grid-template-columns:1fr 1fr 1fr}
+@media(max-width:560px){ .logsummary{grid-template-columns:1fr 1fr} }
+
 .kparea{font:600 10px var(--mono);color:var(--faint);letter-spacing:.08em;margin:9px 2px 5px}
 .ptg{display:flex;flex-wrap:wrap;gap:6px}
 .ptgb{font:600 12px var(--sans);color:var(--dim);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:7px 12px;cursor:pointer}
@@ -211,7 +219,8 @@ const MODE = CONFIG.GAS_URL ? "live" : "mock";
 const LS_KEY = "dive-zukan-v1";
 
 /* ================= 状態 ================= */
-let DB = { fish: [], records: [], comments: [], points: [], reactions: [] };
+let DB = { fish: [], records: [], comments: [], points: [], reactions: [], logs: [] };
+const LOGF = { mine: false };
 const FILTER = { q: "", point: "", rarity: new Set() };
 const AUTH = { ready: false, status: "", name: "" };
 let PENDING_MEMBERS = null;
@@ -397,7 +406,10 @@ function seedData() {
   const reactions = [
     { targetType: "fish", targetId: "f1", emoji: "🤩", by: "サンプル", createdAt: "" }
   ];
-  return { fish, records, comments, points, reactions };
+  const logs = [
+    { id: "l1", diveNo: "42", date: "2025-11-02", pointId: "izu-osezaki-wannai", duration: "46", maxDepth: "18.5", waterTemp: "19", visibility: "12", weather: "晴れ", buddy: "サンプル2", memo: "ロープ沿いをのんびり。(サンプルデータ)", by: "サンプル", createdAt: "" }
+  ];
+  return { fish, records, comments, points, reactions, logs };
 }
 
 const LocalStore = {
@@ -408,6 +420,7 @@ const LocalStore = {
         const d = JSON.parse(raw);
         d.points = mergePoints(d.points); // 旧形式の保存データも新マスタで上書き
         d.reactions = d.reactions || [];
+        d.logs = d.logs || [];
         return Promise.resolve(d);
       }
     } catch (e) { /* 破損時はseedへ */ }
@@ -446,6 +459,17 @@ const LocalStore = {
     const np = { id: "p-" + uid(), area: p.area, subarea: p.subarea || "", name: p.pointName, lat: "", lng: "" };
     DB.points.push(np); this.save(); return np.id;
   },
+  async addLog(p) {
+    const l = { ...p, id: uid(), by: myName() || "自分", createdAt: todayStr() };
+    delete l.logId;
+    DB.logs.push(l); this.save(); return l.id;
+  },
+  async editLog(p) {
+    const l = DB.logs.find(x => String(x.id) === String(p.logId));
+    if (!l) throw { code: "notfound" };
+    ["diveNo", "date", "pointId", "duration", "maxDepth", "waterTemp", "visibility", "weather", "buddy", "memo"].forEach(k => { l[k] = p[k]; });
+    this.save();
+  },
   async toggleReaction(p) {
     const mine = MY_RX.has(rxKey(p.targetType, p.targetId, p.emoji));
     if (mine) {
@@ -470,6 +494,7 @@ const RemoteStore = {
     j.fish.forEach(f => { f.knownPointIds = f.knownPointIds || []; f.seasons = f.seasons || []; });
     j.points = mergePoints(j.points);
     j.reactions = j.reactions || [];
+    j.logs = j.logs || [];
     return j;
   },
   async post(action, payload) {
@@ -495,7 +520,9 @@ const RemoteStore = {
     return this.post("editRecord", payload);
   },
   async addPoint(p) { return (await this.post("addPoint", p)).id; },
-  async toggleReaction(p) { return this.post("toggleReaction", p); }
+  async toggleReaction(p) { return this.post("toggleReaction", p); },
+  async addLog(p) { return (await this.post("addLog", p)).id; },
+  async editLog(p) { return this.post("editLog", p); }
 };
 const Store = MODE === "live" ? RemoteStore : LocalStore;
 
@@ -736,7 +763,10 @@ function viewFish(id) {
         <div class="rmeta">${r.depth ? esc(r.depth) + "m ・ " : ""}${esc(r.by || "?")}</div>
         ${r.memo ? `<div class="rmemo">${esc(r.memo)}</div>` : ""}
         ${rxBoxHtml("record", r.id, true)}
-        ${canEditRec(r) ? `<div style="margin-top:7px"><button class="editlink" data-editrec="${esc(r.id)}">この記録を編集</button></div>` : ""}
+        <div style="margin-top:7px;display:flex;gap:6px">
+          ${(lg => lg ? `<button class="editlink" data-openlog="${esc(lg.id)}">この日のログ</button>` : "")(recordLog(r))}
+          ${canEditRec(r) ? `<button class="editlink" data-editrec="${esc(r.id)}">この記録を編集</button>` : ""}
+        </div>
       </div>
     </div>`).join("") || `<div class="empty">まだ記録がありません</div>`}
   <div class="h2">コメント ${cms.length}件</div>
@@ -984,6 +1014,18 @@ function route() {
   } else if (page === "setup") {
     app.innerHTML = viewSetup();
     bindSetup();
+  } else if (page === "logs") {
+    app.innerHTML = viewLogs();
+    bindLogs();
+  } else if (page === "log" && arg) {
+    app.innerHTML = viewLog(decodeURIComponent(arg));
+    bindLog(decodeURIComponent(arg));
+  } else if (page === "logadd") {
+    app.innerHTML = viewLogForm("");
+    bindLogForm("");
+  } else if (page === "logedit" && arg) {
+    app.innerHTML = viewLogForm(decodeURIComponent(arg));
+    bindLogForm(decodeURIComponent(arg));
   } else if (page === "editfish" && arg) {
     app.innerHTML = viewEditFish(decodeURIComponent(arg));
     bindEditFish(decodeURIComponent(arg));
@@ -1008,7 +1050,7 @@ function route() {
     app.innerHTML = viewList();
     bindList();
   }
-  renderTabs(page === "post" ? "post" : page === "admin" ? "admin" : "zukan");
+  renderTabs(page === "post" ? "post" : page === "admin" ? "admin" : page.startsWith("log") ? "logs" : "zukan");
   window.scrollTo(0, 0);
 }
 
@@ -1046,6 +1088,9 @@ function bindFish(id) {
   }, { passive: true });
   const efb = $("#editFishBtn");
   if (efb) efb.addEventListener("click", () => { location.hash = "#/editfish/" + encodeURIComponent(id); });
+  document.querySelectorAll("[data-openlog]").forEach(b => b.addEventListener("click", () => {
+    location.hash = "#/log/" + encodeURIComponent(b.dataset.openlog);
+  }));
   document.querySelectorAll("[data-editrec]").forEach(b => b.addEventListener("click", () => {
     location.hash = "#/editrec/" + encodeURIComponent(b.dataset.editrec);
   }));
@@ -1155,6 +1200,168 @@ function renderPreviews() {
     POST_STATE.photos.splice(Number(b.dataset.del), 1);
     renderPreviews();
   }));
+}
+
+/* ================= ダイビングログ =================
+ * 図鑑との紐づけは「名前×日付×ポイント」の一致で自動導出(手動リンク不要)。 */
+const meName = () => AUTH.name || myName();
+const canEditLog = (l) => AUTH.status === "owner" || (!!meName() && l.by === meName());
+const logFishRecords = (l) => DB.records.filter(r =>
+  r.by === l.by && String(r.pointId) === String(l.pointId) && String(r.date) === String(l.date));
+const recordLog = (r) => DB.logs.find(l =>
+  l.by === r.by && String(l.pointId) === String(r.pointId) && String(l.date) === String(r.date));
+
+function sortedLogs() {
+  return DB.logs.slice().sort((a, b) =>
+    String(b.date).localeCompare(String(a.date)) || String(b.createdAt).localeCompare(String(a.createdAt)));
+}
+
+function viewLogs() {
+  const meN = meName();
+  const list = sortedLogs().filter(l => !LOGF.mine || (meN && l.by === meN));
+  return `
+  <div class="loghead">
+    <button class="postbtn" onclick="location.hash='#/logadd'">ログを書く</button>
+    <button class="rchip" id="mineOnly" aria-pressed="${LOGF.mine}">自分のログだけ</button>
+  </div>
+  <div class="count">${list.length}本${LOGF.mine ? "(自分)" : ""} / 全${DB.logs.length}本</div>
+  ${list.map(l => {
+    const nf = logFishRecords(l).length;
+    return `<div class="logrow" data-log="${esc(l.id)}">
+      <span class="lno">${l.diveNo ? "No." + esc(l.diveNo) : "—"}</span>
+      <div class="rmain">
+        <div class="rtop"><span class="rpoint">${esc(pointName(l.pointId))}</span><span class="rdate">${esc(l.date)}</span></div>
+        <div class="rmeta">${esc(l.by || "?")}${l.maxDepth ? ` ・ 最大${esc(l.maxDepth)}m` : ""}${l.duration ? ` ・ ${esc(l.duration)}分` : ""}${nf ? ` ・ 🐟${nf}` : ""}</div>
+      </div>
+    </div>`;
+  }).join("") || `<div class="empty">まだログがありません。<br>「ログを書く」から1本目をどうぞ。</div>`}`;
+}
+
+function bindLogs() {
+  $("#mineOnly").addEventListener("click", () => { LOGF.mine = !LOGF.mine; route(); });
+  document.querySelectorAll("[data-log]").forEach(el => el.addEventListener("click", () => {
+    location.hash = "#/log/" + encodeURIComponent(el.dataset.log);
+  }));
+}
+
+function viewLog(id) {
+  const l = DB.logs.find(x => String(x.id) === String(id));
+  if (!l) return `<div class="empty">このログは見つかりません</div>`;
+  const recs = logFishRecords(l);
+  const fld = (k, v) => v ? `<div><div class="sk">${k}</div><div class="sv">${esc(v)}</div></div>` : "";
+  return `
+  <span class="back" onclick="history.back()">← ログ一覧へ</span>
+  <div class="dhead">
+    <div>
+      <div class="dname">${esc(pointName(l.pointId))}</div>
+      <div class="dby">${l.diveNo ? "No." + esc(l.diveNo) + " ・ " : ""}${esc(l.date)} ・ ${esc(l.by || "?")}</div>
+      ${canEditLog(l) ? `<div style="margin-top:8px"><button class="editlink" id="editLogBtn">このログを編集</button></div>` : ""}
+    </div>
+  </div>
+  ${rxBoxHtml("log", l.id, false)}
+  <div class="summary logsummary">
+    ${fld("潜水時間", l.duration && l.duration + "分")}
+    ${fld("最大水深", l.maxDepth && l.maxDepth + "m")}
+    ${fld("水温", l.waterTemp && l.waterTemp + "℃")}
+    ${fld("透明度", l.visibility && l.visibility + "m")}
+    ${fld("天気", l.weather)}
+    ${fld("バディ", l.buddy)}
+  </div>
+  ${l.memo ? `<div class="desc">${esc(l.memo)}</div>` : ""}
+  <div class="h2">このダイブで図鑑に上げた魚 ${recs.length}件</div>
+  ${recs.map(r => {
+    const f = DB.fish.find(x => String(x.id) === String(r.fishId));
+    return `<div class="rec" data-openfish="${esc(r.fishId)}" style="cursor:pointer">
+      <div class="rthumb">${(r.photoIds && r.photoIds[0]) ? `<img src="${esc(photoSrc(r.photoIds[0], 300))}" loading="lazy" alt="">` : FISH_SVG}</div>
+      <div class="rmain">
+        <div class="rtop"><span class="rpoint">${esc(f ? f.name : "?")}</span>${f ? stars(f.rarity) : ""}</div>
+        ${r.memo ? `<div class="rmemo">${esc(r.memo)}</div>` : ""}
+      </div>
+    </div>`;
+  }).join("") || `<div class="empty">同じ日付・ポイントであなたが図鑑に投稿すると、ここに自動で並びます</div>`}`;
+}
+
+function bindLog(id) {
+  bindRxBars();
+  const eb = $("#editLogBtn");
+  if (eb) eb.addEventListener("click", () => { location.hash = "#/logedit/" + encodeURIComponent(id); });
+  document.querySelectorAll("[data-openfish]").forEach(el => el.addEventListener("click", () => {
+    location.hash = "#/fish/" + encodeURIComponent(el.dataset.openfish);
+  }));
+}
+
+function viewLogForm(logId) {
+  const l = logId ? DB.logs.find(x => String(x.id) === String(logId)) : null;
+  if (logId && !l) return `<div class="empty">このログは見つかりません</div>`;
+  const meN = meName();
+  const mineNos = DB.logs.filter(x => meN && x.by === meN).map(x => parseInt(x.diveNo, 10)).filter(n => !isNaN(n));
+  const nextNo = mineNos.length ? Math.max(...mineNos) + 1 : "";
+  const v = (k) => esc(l ? (l[k] || "") : "");
+  return `
+  <span class="back" onclick="history.back()">← 戻る</span>
+  <div class="form">
+    ${(!l && !meN) ? `<div class="fgroup"><label class="flabel">投稿者名(ニックネーム)</label>
+      <input class="finput" id="mockName" placeholder="例: しゅん" value="${esc(myName())}"></div>` : ""}
+    <div class="fgroup"><label class="flabel">日付(必須)</label><input class="finput" type="date" id="lgDate" value="${l ? v("date") : todayStr()}"></div>
+    <div class="fgroup"><label class="flabel">ポイント(必須)</label>
+      <select class="fselect" id="lgPoint"><option value="">選択してください</option>${pointOptions(l ? l.pointId : "")}${NEW_POINT_OPT}</select>
+      ${npFieldsHtml("lgnp")}
+    </div>
+    <div class="frow">
+      <div class="fgroup" style="flex:1"><label class="flabel">通算No.</label><input class="finput" type="number" id="lgNo" inputmode="numeric" value="${l ? v("diveNo") : nextNo}" placeholder="例: 43"></div>
+      <div class="fgroup" style="flex:1"><label class="flabel">潜水時間(分)</label><input class="finput" type="number" id="lgDur" inputmode="numeric" value="${v("duration")}" placeholder="46"></div>
+    </div>
+    <div class="frow">
+      <div class="fgroup" style="flex:1"><label class="flabel">最大水深(m)</label><input class="finput" type="number" step="0.1" id="lgDepth" inputmode="decimal" value="${v("maxDepth")}" placeholder="18.5"></div>
+      <div class="fgroup" style="flex:1"><label class="flabel">水温(℃)</label><input class="finput" type="number" step="0.1" id="lgTemp" inputmode="decimal" value="${v("waterTemp")}" placeholder="19"></div>
+    </div>
+    <div class="frow">
+      <div class="fgroup" style="flex:1"><label class="flabel">透明度(m)</label><input class="finput" type="number" id="lgVis" inputmode="numeric" value="${v("visibility")}" placeholder="12"></div>
+      <div class="fgroup" style="flex:1"><label class="flabel">天気</label><input class="finput" id="lgWx" maxlength="20" value="${v("weather")}" placeholder="晴れ"></div>
+    </div>
+    <div class="fgroup"><label class="flabel">バディ(任意)</label><input class="finput" id="lgBuddy" maxlength="60" value="${v("buddy")}"></div>
+    <div class="fgroup"><label class="flabel">メモ(任意)</label><textarea class="ftext" id="lgMemo">${v("memo")}</textarea></div>
+    <div class="notice" style="border-left-color:var(--aqua);color:var(--dim);background:var(--surface);border-color:var(--line)">同じ日付・ポイントで図鑑に投稿した魚は、このログに自動で紐づきます。</div>
+    <button class="submit" id="lgSave">${l ? "保存する" : "ログを保存する"}</button>
+  </div>`;
+}
+
+function bindLogForm(logId) {
+  if (logId && !DB.logs.find(x => String(x.id) === String(logId))) return;
+  bindNewPoint("lgPoint", "lgnp");
+  $("#lgSave").addEventListener("click", async () => {
+    const nameEl = $("#mockName");
+    if (nameEl) {
+      const n = (nameEl.value || "").trim();
+      if (!n) { toast("投稿者名を入れてください"); return; }
+      setMyName(n);
+    }
+    if (!$("#lgDate").value) { toast("日付を入れてください"); return; }
+    if (!$("#lgPoint").value) { toast("ポイントを選んでください"); return; }
+    const btn = $("#lgSave");
+    btn.disabled = true; btn.textContent = "保存中…";
+    try {
+      const pointId = await resolvePointSel("lgPoint", "lgnp");
+      if (!pointId) { btn.disabled = false; btn.textContent = logId ? "保存する" : "ログを保存する"; return; }
+      const payload = {
+        logId: logId || undefined, pointId,
+        date: $("#lgDate").value, diveNo: $("#lgNo").value.trim(),
+        duration: $("#lgDur").value.trim(), maxDepth: $("#lgDepth").value.trim(),
+        waterTemp: $("#lgTemp").value.trim(), visibility: $("#lgVis").value.trim(),
+        weather: $("#lgWx").value.trim(), buddy: $("#lgBuddy").value.trim(),
+        memo: $("#lgMemo").value.trim()
+      };
+      let id = logId;
+      if (logId) await Store.editLog(payload);
+      else id = await Store.addLog(payload);
+      if (MODE === "live") await reload();
+      toast("ログを保存しました");
+      location.hash = "#/log/" + encodeURIComponent(id);
+    } catch (e) {
+      handleApiError(e);
+      btn.disabled = false; btn.textContent = logId ? "保存する" : "ログを保存する";
+    }
+  });
 }
 
 /* ================= 編集(魚=共同編集 / 記録=本人+オーナー) ================= */
@@ -1298,7 +1505,7 @@ function bindAdmin() {
 async function reload() { DB = await Store.load(); }
 
 function renderTabs(active) {
-  const tabs = [["zukan", "図鑑", "#/"], ["post", "記録", "#/post"]];
+  const tabs = [["zukan", "図鑑", "#/"], ["logs", "ログ", "#/logs"], ["post", "記録", "#/post"]];
   if (MODE === "live" && AUTH.status === "owner") tabs.push(["admin", "管理", "#/admin"]);
   const bar = $("#tabbar");
   bar.innerHTML = tabs.map(([k, label, href]) =>
