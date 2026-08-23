@@ -153,6 +153,16 @@ select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid va
 .pcredit{position:absolute;left:10px;bottom:10px;background:rgba(18,64,78,.62);color:#fff;font:600 10.5px var(--mono);padding:4px 9px;border-radius:7px}
 .pcount{position:absolute;top:10px;right:10px;background:rgba(18,64,78,.62);color:#fff;font:700 11px var(--mono);padding:4px 9px;border-radius:7px;z-index:2;pointer-events:none}
 .editlink{font:600 11.5px var(--sans);color:var(--aqua-deep);border:1px solid var(--line);border-radius:7px;padding:4px 10px;background:var(--surface);cursor:pointer;white-space:nowrap}
+/* リアクション */
+.rxbar{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 2px}
+.rx{font:600 14px var(--sans);color:var(--dim);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:7px 11px;cursor:pointer;line-height:1}
+.rx[aria-pressed="true"]{border-color:var(--aqua);background:#e0f3f1;color:var(--aqua-deep)}
+.rx .n{font:700 11px var(--mono);margin-left:5px;color:var(--aqua-deep)}
+.rx:disabled{opacity:.6}
+.rxbar.small{margin:8px 0 0}
+.rxbar.small .rx{font-size:12px;padding:5px 8px}
+.rxbar.small .rx .n{font-size:10px;margin-left:4px}
+
 .kparea{font:600 10px var(--mono);color:var(--faint);letter-spacing:.08em;margin:9px 2px 5px}
 .ptg{display:flex;flex-wrap:wrap;gap:6px}
 .ptgb{font:600 12px var(--sans);color:var(--dim);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:7px 12px;cursor:pointer}
@@ -200,7 +210,7 @@ const MODE = CONFIG.GAS_URL ? "live" : "mock";
 const LS_KEY = "dive-zukan-v1";
 
 /* ================= 状態 ================= */
-let DB = { fish: [], records: [], comments: [], points: [] };
+let DB = { fish: [], records: [], comments: [], points: [], reactions: [] };
 const FILTER = { q: "", point: "", rarity: new Set() };
 const AUTH = { ready: false, status: "", name: "" };
 let PENDING_MEMBERS = null;
@@ -220,6 +230,67 @@ function toast(msg) {
 }
 
 const FISH_SVG = `<svg viewBox="0 0 64 40" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 20c8-9 18-14 28-14 10 0 18 6 24 14-6 8-14 14-24 14-10 0-20-5-28-14Z" stroke="#8fbecb" stroke-width="2.4"/><circle cx="47" cy="17" r="2.2" fill="#8fbecb"/><path d="M6 20l-4-7v14l4-7Z" fill="#8fbecb"/></svg>`;
+
+/* ================= リアクション =================
+ * 固定5種のトグル式。誰が押したかはサーバーが端末トークンで管理し、
+ * 「自分がどれを押したか」の見た目はこの端末のミラー(localStorage)で持つ。 */
+const RX_SET = ["👍", "❤️", "🤩", "📸", "🤿"];
+const RX_MINE_KEY = LS_KEY + "-rx";
+let MY_RX;
+try { MY_RX = new Set(JSON.parse(localStorage.getItem(RX_MINE_KEY) || "[]")); } catch (e) { MY_RX = new Set(); }
+const rxKey = (t, id, e) => t + ":" + id + ":" + e;
+const saveMyRx = () => localStorage.setItem(RX_MINE_KEY, JSON.stringify([...MY_RX]));
+function rxCounts(t, id) {
+  const m = {};
+  DB.reactions.forEach(r => {
+    if (r.targetType === t && String(r.targetId) === String(id)) m[r.emoji] = (m[r.emoji] || 0) + 1;
+  });
+  return m;
+}
+function fishRxTotal(f) {
+  const recIds = new Set(fishRecords(f.id).map(r => String(r.id)));
+  return DB.reactions.filter(r =>
+    (r.targetType === "fish" && String(r.targetId) === String(f.id)) ||
+    (r.targetType === "record" && recIds.has(String(r.targetId)))).length;
+}
+function rxBarHtml(t, id, small) {
+  const counts = rxCounts(t, id);
+  return `<div class="rxbar${small ? " small" : ""}">` + RX_SET.map(e => {
+    const n = counts[e] || 0;
+    return `<button type="button" class="rx" data-rx="${esc(t)}|${esc(id)}|${e}" aria-pressed="${MY_RX.has(rxKey(t, id, e))}">${e}${n ? `<span class="n">${n}</span>` : ""}</button>`;
+  }).join("") + `</div>`;
+}
+function bindRxBars() {
+  document.querySelectorAll("[data-rx]").forEach(b => b.addEventListener("click", async (ev) => {
+    ev.stopPropagation();
+    if (b.disabled) return;
+    const [t, id, e] = b.dataset.rx.split("|");
+    const k = rxKey(t, id, e);
+    const wasMine = MY_RX.has(k);
+    b.setAttribute("aria-pressed", String(!wasMine)); // 楽観更新
+    b.disabled = true;
+    try {
+      const res = await Store.toggleReaction({ targetType: t, targetId: id, emoji: e });
+      if (res.state === "added") MY_RX.add(k); else MY_RX.delete(k);
+      saveMyRx();
+      if (MODE === "live") { // モックはStore側がDBを直接更新する
+        if (res.state === "added") {
+          DB.reactions.push({ targetType: t, targetId: id, emoji: e, by: AUTH.name || myName(), createdAt: "" });
+        } else {
+          const i = DB.reactions.findIndex(r => r.targetType === t && String(r.targetId) === String(id) && r.emoji === e);
+          if (i >= 0) DB.reactions.splice(i, 1);
+        }
+      }
+      b.setAttribute("aria-pressed", String(res.state === "added"));
+      b.innerHTML = e + (res.count ? `<span class="n">${res.count}</span>` : "");
+    } catch (err) {
+      b.setAttribute("aria-pressed", String(wasMine));
+      handleApiError(err);
+    } finally {
+      b.disabled = false;
+    }
+  }));
+}
 
 function stars(n) {
   n = Math.max(0, Math.min(5, Number(n) || 0));
@@ -305,7 +376,10 @@ function seedData() {
   const comments = [
     { id: "c1", targetType: "fish", targetId: "f1", text: "これ見たさに冬の大瀬崎行くまである", by: "サンプル", createdAt: "" }
   ];
-  return { fish, records, comments, points };
+  const reactions = [
+    { targetType: "fish", targetId: "f1", emoji: "🤩", by: "サンプル", createdAt: "" }
+  ];
+  return { fish, records, comments, points, reactions };
 }
 
 const LocalStore = {
@@ -315,6 +389,7 @@ const LocalStore = {
       if (raw) {
         const d = JSON.parse(raw);
         d.points = mergePoints(d.points); // 旧形式の保存データも新マスタで上書き
+        d.reactions = d.reactions || [];
         return Promise.resolve(d);
       }
     } catch (e) { /* 破損時はseedへ */ }
@@ -352,6 +427,18 @@ const LocalStore = {
     if (dup) return dup.id;
     const np = { id: "p-" + uid(), area: p.area, subarea: p.subarea || "", name: p.pointName, lat: "", lng: "" };
     DB.points.push(np); this.save(); return np.id;
+  },
+  async toggleReaction(p) {
+    const mine = MY_RX.has(rxKey(p.targetType, p.targetId, p.emoji));
+    if (mine) {
+      const i = DB.reactions.findIndex(r => r.targetType === p.targetType && String(r.targetId) === String(p.targetId) && r.emoji === p.emoji);
+      if (i >= 0) DB.reactions.splice(i, 1);
+    } else {
+      DB.reactions.push({ targetType: p.targetType, targetId: p.targetId, emoji: p.emoji, by: myName() || "自分", createdAt: todayStr() });
+    }
+    this.save();
+    const count = DB.reactions.filter(r => r.targetType === p.targetType && String(r.targetId) === String(p.targetId) && r.emoji === p.emoji).length;
+    return { state: mine ? "removed" : "added", count };
   }
 };
 
@@ -364,6 +451,7 @@ const RemoteStore = {
     j.records.forEach(r => { r.photoIds = r.photoIds || []; });
     j.fish.forEach(f => { f.knownPointIds = f.knownPointIds || []; f.seasons = f.seasons || []; });
     j.points = mergePoints(j.points);
+    j.reactions = j.reactions || [];
     return j;
   },
   async post(action, payload) {
@@ -388,7 +476,8 @@ const RemoteStore = {
       removePhotoIds: p.removePhotoIds || [], addPhotos: (p.addPhotos || []).map(x => ({ b64: x.b64, mime: x.mime })) };
     return this.post("editRecord", payload);
   },
-  async addPoint(p) { return (await this.post("addPoint", p)).id; }
+  async addPoint(p) { return (await this.post("addPoint", p)).id; },
+  async toggleReaction(p) { return this.post("toggleReaction", p); }
 };
 const Store = MODE === "live" ? RemoteStore : LocalStore;
 
@@ -559,6 +648,7 @@ function viewList() {
 function cardHtml(f) {
   const d = derive(f);
   const ph = d.photos[0];
+  const rxTotal = fishRxTotal(f);
   const siteChips = d.sites.slice(0, 2).map(s => `<span class="site">${esc(s)}</span>`).join("")
     + (d.sites.length > 2 ? `<span class="site">+${d.sites.length - 2}</span>` : "");
   return `<div class="card" onclick="location.hash='#/fish/${esc(f.id)}'">
@@ -567,7 +657,7 @@ function cardHtml(f) {
       <div class="cname">${esc(f.name)}</div>
       ${stars(f.rarity)}
       <div class="sites">${siteChips || `<span class="site">記録なし</span>`}</div>
-      <div class="nrec">${d.recs.length}件の記録</div>
+      <div class="nrec">${d.recs.length}件の記録${rxTotal ? ` ・ 👍${rxTotal}` : ""}</div>
     </div>
   </div>`;
 }
@@ -600,6 +690,7 @@ function viewFish(id) {
     </div>
     <span class="rtag" style="color:${rcolor(f.rarity)};border-color:${rcolor(f.rarity)}">レア度 ${esc(f.rarity)}</span>
   </div>
+  ${rxBarHtml("fish", f.id)}
   ${f.description ? `<div class="desc">${esc(f.description)}</div>` : ""}
   <div class="summary">
     <div><div class="sk">見られた場所</div><div class="sv">${d.sites.length ? d.sites.map(s => `<span class="site">${esc(s)}</span>`).join(" ") : "—"}</div></div>
@@ -626,6 +717,7 @@ function viewFish(id) {
         <div class="rtop"><span class="rpoint">${esc(pointName(r.pointId))}</span><span class="rdate">${esc(r.date)}</span></div>
         <div class="rmeta">${r.depth ? esc(r.depth) + "m ・ " : ""}${esc(r.by || "?")}</div>
         ${r.memo ? `<div class="rmemo">${esc(r.memo)}</div>` : ""}
+        ${rxBarHtml("record", r.id, true)}
         ${canEditRec(r) ? `<div style="margin-top:7px"><button class="editlink" data-editrec="${esc(r.id)}">この記録を編集</button></div>` : ""}
       </div>
     </div>`).join("") || `<div class="empty">まだ記録がありません</div>`}
@@ -927,6 +1019,7 @@ function refreshListOnly() {
 }
 
 function bindFish(id) {
+  bindRxBars();
   const sw = $("#pswipe");
   if (sw) sw.addEventListener("scroll", () => {
     const i = Math.min(sw.children.length, Math.round(sw.scrollLeft / sw.clientWidth) + 1);

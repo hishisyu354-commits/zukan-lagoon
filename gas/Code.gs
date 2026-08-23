@@ -23,14 +23,18 @@
 
 var PROPS = PropertiesService.getScriptProperties();
 
-var VERSION = "v4"; // ping応答に含める。フロント/Claudeが反映確認に使う
+var VERSION = "v5"; // ping応答に含める。フロント/Claudeが反映確認に使う
+
+// リアクションの許可セット(フロントのRX_SETと一致させる)
+var REACTIONS = ["👍", "❤️", "🤩", "📸", "🤿"];
 
 var SHEET_DEFS = {
   fish:     ["id", "name", "rarity", "description", "knownPointIds", "seasons", "createdByName", "createdByToken", "createdAt"],
   records:  ["id", "fishId", "pointId", "date", "depth", "memo", "photoIds", "userName", "token", "createdAt"],
   comments: ["id", "targetType", "targetId", "text", "userName", "token", "createdAt"],
   points:   ["id", "area", "subarea", "name", "lat", "lng"],
-  members:  ["token", "displayName", "status", "requestedAt", "updatedAt"]
+  members:  ["token", "displayName", "status", "requestedAt", "updatedAt"],
+  reactions: ["id", "targetType", "targetId", "emoji", "userName", "token", "createdAt"]
 };
 
 // 初期ポイント(新規setup時のみ使用)。階層=エリア>サブエリア>ポイント。緯度経度はおおよそ。
@@ -106,6 +110,7 @@ function ss_() {
 
 function readAll_(name) {
   var sh = ss_().getSheetByName(name);
+  if (!sh) return []; // 後から増えたシート(reactions等)が旧DBに無くても読みは壊れない
   var vals = sh.getDataRange().getValues();
   var head = vals.shift();
   return vals.filter(function (r) { return String(r[0]) !== ""; }).map(function (r) {
@@ -164,6 +169,17 @@ function updateRowById_(name, id, patch) {
     }
   }
   return false;
+}
+
+// 後から増えたシートが無ければヘッダー付きで作る(既存DBのマイグレーション)
+function ensureSheet_(name) {
+  var ss = ss_();
+  var sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+    sh.appendRow(SHEET_DEFS[name]);
+  }
+  return sh;
 }
 
 // 稼働中のシートに足りない列(後から追加した定義)をヘッダー行へ自動追記する
@@ -233,7 +249,10 @@ function doGet(e) {
     return { id: c.id, targetType: c.targetType, targetId: c.targetId, text: c.text, by: c.userName, createdAt: c.createdAt };
   });
   var points = readAll_("points");
-  return json_({ ok: true, fish: fish, records: records, comments: comments, points: points });
+  var reactions = readAll_("reactions").map(function (r) {
+    return { targetType: r.targetType, targetId: r.targetId, emoji: r.emoji, by: r.userName, createdAt: r.createdAt };
+  });
+  return json_({ ok: true, fish: fish, records: records, comments: comments, points: points, reactions: reactions });
 }
 
 function fmtDate_(v) {
@@ -317,6 +336,7 @@ function doPost(e) {
     if (req.action === "addRecord")  return addRecord_(req, auth);
     if (req.action === "addComment") return addComment_(req, auth);
     if (req.action === "addPoint")   return addPoint_(req, auth);
+    if (req.action === "toggleReaction") return toggleReaction_(req, auth);
     if (req.action === "editFish")   return editFish_(req, auth);
     if (req.action === "editRecord") return editRecord_(req, auth, me.status === "owner");
     return json_({ ok: false, code: "unknown_action" });
@@ -392,6 +412,37 @@ function addPoint_(req, auth) {
   var id = "p-" + Utilities.getUuid().slice(0, 8);
   appendRow_("points", { id: id, area: area, subarea: sub, name: name, lat: "", lng: "" });
   return json_({ ok: true, id: id });
+}
+
+// リアクションのトグル。同じ人(トークン)×同じ対象×同じ絵文字は1つまで。
+// 2回目のタップで自分の行だけを削除する(他人の行は消せない)
+function toggleReaction_(req, auth) {
+  var tt = req.targetType === "record" ? "record" : "fish";
+  var tid = String(req.targetId || "");
+  var emoji = String(req.emoji || "");
+  if (!tid) return json_({ ok: false, code: "validation", message: "対象が未指定" });
+  if (REACTIONS.indexOf(emoji) < 0) return json_({ ok: false, code: "validation", message: "不明なリアクション" });
+  var sh = ensureSheet_("reactions");
+  var vals = sh.getDataRange().getValues();
+  var head = vals[0].map(String);
+  var iTok = head.indexOf("token"), iTt = head.indexOf("targetType"),
+      iTid = head.indexOf("targetId"), iEm = head.indexOf("emoji");
+  var mineRow = -1, count = 0;
+  for (var i = 1; i < vals.length; i++) {
+    if (String(vals[i][iTt]) === tt && String(vals[i][iTid]) === tid && String(vals[i][iEm]) === emoji) {
+      count++;
+      if (String(vals[i][iTok]) === auth.token) mineRow = i + 1;
+    }
+  }
+  if (mineRow > 0) {
+    sh.deleteRow(mineRow);
+    return json_({ ok: true, state: "removed", count: count - 1 });
+  }
+  appendRow_("reactions", {
+    id: Utilities.getUuid(), targetType: tt, targetId: tid, emoji: emoji,
+    userName: auth.name, token: auth.token, createdAt: now_()
+  });
+  return json_({ ok: true, state: "added", count: count + 1 });
 }
 
 /* ---------------- 編集API ---------------- */
