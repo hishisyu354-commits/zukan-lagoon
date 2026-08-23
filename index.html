@@ -162,6 +162,7 @@ select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid va
 .rxbar.small{margin:8px 0 0}
 .rxbar.small .rx{font-size:12px;padding:5px 8px}
 .rxbar.small .rx .n{font-size:10px;margin-left:4px}
+.rxwho{font:500 11px var(--sans);color:var(--faint);line-height:1.7;margin:6px 2px 0;word-break:break-word}
 
 .kparea{font:600 10px var(--mono);color:var(--faint);letter-spacing:.08em;margin:9px 2px 5px}
 .ptg{display:flex;flex-wrap:wrap;gap:6px}
@@ -260,8 +261,21 @@ function rxBarHtml(t, id, small) {
     return `<button type="button" class="rx" data-rx="${esc(t)}|${esc(id)}|${e}" aria-pressed="${MY_RX.has(rxKey(t, id, e))}">${e}${n ? `<span class="n">${n}</span>` : ""}</button>`;
   }).join("") + `</div>`;
 }
-function bindRxBars() {
-  document.querySelectorAll("[data-rx]").forEach(b => b.addEventListener("click", async (ev) => {
+// 誰が押したか(絵文字ごとに名前を列挙)
+function rxWhoHtml(t, id) {
+  const parts = RX_SET.map(e => {
+    const names = DB.reactions
+      .filter(r => r.targetType === t && String(r.targetId) === String(id) && r.emoji === e)
+      .map(r => esc(r.by || "名無し"));
+    return names.length ? `${e} ${names.join("・")}` : "";
+  }).filter(Boolean);
+  return parts.length ? `<div class="rxwho">${parts.join(" ／ ")}</div>` : "";
+}
+function rxBoxHtml(t, id, small) {
+  return `<div class="rxbox" data-rxbox="${esc(t)}|${esc(id)}" data-small="${small ? 1 : 0}">${rxBarHtml(t, id, small)}${rxWhoHtml(t, id)}</div>`;
+}
+function bindRxBars(scope) {
+  (scope || document).querySelectorAll("[data-rx]").forEach(b => b.addEventListener("click", async (ev) => {
     ev.stopPropagation();
     if (b.disabled) return;
     const [t, id, e] = b.dataset.rx.split("|");
@@ -275,19 +289,23 @@ function bindRxBars() {
       saveMyRx();
       if (MODE === "live") { // モックはStore側がDBを直接更新する
         if (res.state === "added") {
-          DB.reactions.push({ targetType: t, targetId: id, emoji: e, by: AUTH.name || myName(), createdAt: "" });
+          DB.reactions.push({ targetType: t, targetId: id, emoji: e, by: AUTH.name || myName() || "自分", createdAt: "" });
         } else {
           const i = DB.reactions.findIndex(r => r.targetType === t && String(r.targetId) === String(id) && r.emoji === e);
           if (i >= 0) DB.reactions.splice(i, 1);
         }
       }
-      b.setAttribute("aria-pressed", String(res.state === "added"));
-      b.innerHTML = e + (res.count ? `<span class="n">${res.count}</span>` : "");
+      // ボタン・名前行ごと描き直して整合させる
+      const box = b.closest(".rxbox");
+      if (box) {
+        const [bt, bid] = box.dataset.rxbox.split("|");
+        box.innerHTML = rxBarHtml(bt, bid, box.dataset.small === "1") + rxWhoHtml(bt, bid);
+        bindRxBars(box);
+      }
     } catch (err) {
       b.setAttribute("aria-pressed", String(wasMine));
-      handleApiError(err);
-    } finally {
       b.disabled = false;
+      handleApiError(err);
     }
   }));
 }
@@ -690,7 +708,7 @@ function viewFish(id) {
     </div>
     <span class="rtag" style="color:${rcolor(f.rarity)};border-color:${rcolor(f.rarity)}">レア度 ${esc(f.rarity)}</span>
   </div>
-  ${rxBarHtml("fish", f.id)}
+  ${rxBoxHtml("fish", f.id, false)}
   ${f.description ? `<div class="desc">${esc(f.description)}</div>` : ""}
   <div class="summary">
     <div><div class="sk">見られた場所</div><div class="sv">${d.sites.length ? d.sites.map(s => `<span class="site">${esc(s)}</span>`).join(" ") : "—"}</div></div>
@@ -717,7 +735,7 @@ function viewFish(id) {
         <div class="rtop"><span class="rpoint">${esc(pointName(r.pointId))}</span><span class="rdate">${esc(r.date)}</span></div>
         <div class="rmeta">${r.depth ? esc(r.depth) + "m ・ " : ""}${esc(r.by || "?")}</div>
         ${r.memo ? `<div class="rmemo">${esc(r.memo)}</div>` : ""}
-        ${rxBarHtml("record", r.id, true)}
+        ${rxBoxHtml("record", r.id, true)}
         ${canEditRec(r) ? `<div style="margin-top:7px"><button class="editlink" data-editrec="${esc(r.id)}">この記録を編集</button></div>` : ""}
       </div>
     </div>`).join("") || `<div class="empty">まだ記録がありません</div>`}
