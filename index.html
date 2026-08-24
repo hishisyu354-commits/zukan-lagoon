@@ -35,6 +35,9 @@ button{font-family:inherit}
 /* header */
 .top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 2px 12px;border-bottom:1px solid var(--line)}
 .brand{font-weight:800;font-size:19px;letter-spacing:-.01em;color:var(--text)}
+.settings{font:600 11.5px var(--sans);color:var(--dim);border:1px solid var(--line);border-radius:7px;padding:5px 11px;background:var(--surface)}
+.chk{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--dim);margin-top:6px;cursor:pointer}
+.chk input{width:18px;height:18px;accent-color:var(--aqua)}
 .postbtn{font:700 13px var(--sans);color:#fff;background:var(--aqua);border:none;border-radius:9px;padding:9px 14px;cursor:pointer;box-shadow:var(--shadow)}
 .postbtn:active{background:var(--aqua-deep)}
 
@@ -199,6 +202,7 @@ select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid va
 
 <header class="top">
   <a class="brand" href="#/">図鑑ラグーン</a>
+  <a class="settings" href="#/setup">設定</a>
 </header>
 
 <div id="app"></div>
@@ -385,7 +389,8 @@ function derive(f) {
     seasons[m >= 3 && m <= 5 ? 0 : m >= 6 && m <= 8 ? 1 : m >= 9 && m <= 11 ? 2 : 3]++;
   });
   // 写真は「誰が撮ったか」を持たせ、全投稿者分を新しい順に並べる(代表1枚に絞らない=公平性)
-  const photos = recs.flatMap(r => (r.photoIds || []).map(pid => ({ id: pid, by: r.by, date: r.date })));
+  // noCreditの記録は撮影者名を伏せる(日付のみ表示)
+  const photos = recs.flatMap(r => (r.photoIds || []).map(pid => ({ id: pid, by: r.noCredit ? "" : r.by, date: r.date })));
   return { recs, sites, depth, seasons, photos };
 }
 
@@ -437,7 +442,7 @@ const LocalStore = {
   async addRecord(p) {
     let fishId = p.fishId;
     if (p.newFish) fishId = await this.addFish(p.newFish);
-    DB.records.push({ id: uid(), fishId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo || "", photoIds: (p.photos || []).map(x => x.dataUrl), by: myName(), createdAt: todayStr() });
+    DB.records.push({ id: uid(), fishId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo || "", noCredit: !!p.noCredit, photoIds: (p.photos || []).map(x => x.dataUrl), by: myName(), createdAt: todayStr() });
     this.save(); return fishId;
   },
   async addComment(p) { DB.comments.push({ id: uid(), targetType: p.targetType, targetId: p.targetId, text: p.text, by: myName(), createdAt: todayStr() }); this.save(); },
@@ -459,6 +464,7 @@ const LocalStore = {
     if (!r) throw { code: "notfound" };
     const remove = new Set(p.removePhotoIds || []);
     r.pointId = p.pointId; r.date = p.date; r.depth = p.depth; r.memo = p.memo || "";
+    r.noCredit = !!p.noCredit;
     r.photoIds = (r.photoIds || []).filter(x => !remove.has(x)).concat((p.addPhotos || []).map(x => x.dataUrl));
     this.save();
   },
@@ -518,7 +524,7 @@ const RemoteStore = {
   },
   async addFish(p) { return (await this.post("addFish", p)).id; },
   async addRecord(p) {
-    const payload = { fishId: p.fishId, newFish: p.newFish, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo, photos: (p.photos || []).map(x => ({ b64: x.b64, mime: x.mime })) };
+    const payload = { fishId: p.fishId, newFish: p.newFish, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo, noCredit: !!p.noCredit, photos: (p.photos || []).map(x => ({ b64: x.b64, mime: x.mime })) };
     return (await this.post("addRecord", payload)).fishId;
   },
   async addComment(p) { return this.post("addComment", p); },
@@ -526,6 +532,7 @@ const RemoteStore = {
   async editFish(p) { return this.post("editFish", p); },
   async editRecord(p) {
     const payload = { recordId: p.recordId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo,
+      noCredit: !!p.noCredit,
       removePhotoIds: p.removePhotoIds || [], addPhotos: (p.addPhotos || []).map(x => ({ b64: x.b64, mime: x.mime })) };
     return this.post("editRecord", payload);
   },
@@ -570,6 +577,8 @@ function handleApiError(err) {
     toast("オーナーコードが違います");
   } else if (err.code === "photo_too_large") {
     toast("写真が大きすぎます(枚数を減らすか撮り直してください)");
+  } else if (err.code === "forbidden") {
+    toast((err.message || "権限がありません") + "。別の端末(ホーム画面アプリ/Safari)で投稿した分なら、右上の設定→端末の引き継ぎで編集できるようになります");
   } else if (err.code === "unknown_action") {
     toast("サーバー側の更新が必要です(Code.gsを貼り直して「新バージョン」でデプロイ)");
   } else if (err.code === "notfound") {
@@ -749,7 +758,7 @@ function viewFish(id) {
   <div class="hero">
     ${d.photos.length ? `
     <div class="pswipe" id="pswipe">
-      ${d.photos.map(p => `<div class="pslide"><div class="ph"><img src="${esc(photoSrc(p.id, 1400))}" loading="lazy" alt=""></div><span class="pcredit">撮影: ${esc(p.by || "?")}${p.date ? " ・ " + esc(p.date) : ""}</span></div>`).join("")}
+      ${d.photos.map(p => `<div class="pslide"><div class="ph"><img src="${esc(photoSrc(p.id, 1400))}" loading="lazy" alt=""></div>${(p.by || p.date) ? `<span class="pcredit">${p.by ? "撮影: " + esc(p.by) + (p.date ? " ・ " : "") : ""}${esc(p.date || "")}</span>` : ""}</div>`).join("")}
     </div>
     ${d.photos.length > 1 ? `<span class="pcount" id="pcount">1/${d.photos.length}</span>` : ""}`
     : `<div class="ph">${FISH_SVG}</div>`}
@@ -855,6 +864,7 @@ function viewPost(fishId) {
       <div class="previews" id="previews"></div>
       <button type="button" class="filebtn" id="fileBtn">写真を選ぶ</button>
       <input type="file" id="fileIn" accept="image/*" multiple style="display:none">
+      <label class="chk"><input type="checkbox" id="noCredit"> 撮影者名を写真に表示しない</label>
     </div>
     <button class="submit" id="submitBtn">記録を保存する</button>
   </div>`;
@@ -875,18 +885,51 @@ function viewAdmin() {
 }
 
 function viewSetup() {
-  if (MODE !== "live") return `<div class="empty">オーナー登録はオンライン版でのみ使えます<br>(GAS接続後にもう一度この画面を開いてください)</div>`;
-  if (AUTH.status === "owner") return `<div class="empty">この端末はすでにオーナーです</div>`;
+  if (MODE !== "live") return `<div class="empty">設定はオンライン版でのみ使えます</div>`;
+  const tok = ensureToken();
   return `
-  <div class="form">
-    <div class="notice">GASの setup() 実行ログに表示された「オーナーコード」を入力すると、この端末がオーナーになります。コードは誰にも見せないでください。</div>
+  <div class="h2">端末の引き継ぎ</div>
+  <div class="form" style="margin-top:0">
+    <div class="notice">この図鑑はブラウザごとに「別の人」として扱われます(<b>ホーム画面のアプリとSafariも別扱い</b>)。投稿した側の端末でコードをコピーし、もう一方に貼って「引き継ぐ」と、同じ人になって編集もできるようになります。<b>コードは合言葉と同じなので、他人に送らないでください。</b></div>
+    <div class="fgroup"><label class="flabel">この端末のコード</label>
+      <div class="frow"><input class="finput" id="myTok" readonly value="${esc(tok)}"><button class="postbtn" id="copyTok" type="button">コピー</button></div>
+    </div>
+    <div class="fgroup"><label class="flabel">別の端末のコードを貼って引き継ぐ</label>
+      <div class="frow"><input class="finput" id="inTok" autocomplete="off" placeholder="投稿した端末で表示したコード"><button class="postbtn" id="useTok" type="button">引き継ぐ</button></div>
+    </div>
+  </div>
+  <div class="h2">オーナー登録</div>
+  ${AUTH.status === "owner" ? `<div class="empty" style="padding:18px">この端末はオーナーです</div>` : `
+  <div class="form" style="margin-top:0">
+    <div class="notice">GASの setup() 実行ログに表示された「オーナーコード」を入力すると、この端末がオーナーになります(全コメントの削除などの管理用)。</div>
     <div class="fgroup"><label class="flabel">オーナーコード</label><input class="finput" id="ownerCode" autocomplete="off"></div>
     <div class="fgroup"><label class="flabel">表示名</label><input class="finput" id="ownerName" placeholder="例: しゅん" value="${esc(myName())}"></div>
     <button class="submit" id="claimBtn">オーナーとして登録</button>
-  </div>`;
+  </div>`}`;
 }
 
 function bindSetup() {
+  const ct = $("#copyTok");
+  if (ct) ct.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(deviceToken()); toast("コピーしました(他人に送らないで)"); }
+    catch (e) { $("#myTok").select(); toast("選択したので長押しでコピーしてください"); }
+  });
+  const ut = $("#useTok");
+  if (ut) ut.addEventListener("click", async () => {
+    const v = $("#inTok").value.trim();
+    if (v.length < 16) { toast("コードが短すぎます"); return; }
+    if (v === deviceToken()) { toast("この端末自身のコードです"); return; }
+    if (!confirm("この端末の投稿者を、コードの持ち主に切り替えます。よろしいですか?")) return;
+    localStorage.setItem(TOKEN_KEY, v);
+    AUTH.status = ""; AUTH.name = "";
+    try {
+      const w = await RemoteStore.post("whoami", {});
+      AUTH.status = w.status || ""; AUTH.name = w.name || "";
+      if (AUTH.name) setMyName(AUTH.name);
+    } catch (e) { /* オフライン等でも切替自体は完了 */ }
+    toast("引き継ぎました" + (AUTH.name ? "(" + AUTH.name + ")" : ""));
+    location.hash = "#/";
+  });
   const btn = $("#claimBtn");
   if (!btn) return;
   btn.addEventListener("click", async () => {
@@ -1229,6 +1272,7 @@ function bindPost(fishId) {
       date: $("#dateIn").value,
       depth: $("#depthIn").value,
       memo: $("#memoIn").value.trim(),
+      noCredit: $("#noCredit").checked,
       photos: POST_STATE.photos
     };
     const np2A = $("#np2Area").value.trim(), np2N = $("#np2Name").value.trim();
@@ -1529,6 +1573,7 @@ function viewEditRecord(id) {
       <div class="previews" id="previews"></div>
       <button type="button" class="filebtn" id="fileBtn">写真を選ぶ</button>
       <input type="file" id="fileIn" accept="image/*" multiple style="display:none">
+      <label class="chk"><input type="checkbox" id="erNoCredit" ${r.noCredit ? "checked" : ""}> 撮影者名を写真に表示しない</label>
     </div>
     <button class="submit" id="erSave">保存する</button>
   </div>`;
@@ -1572,6 +1617,7 @@ function bindEditRecord(id) {
       await Store.editRecord({
         recordId: id, pointId: resolvedPointId, date,
         depth: $("#erDepth").value, memo: $("#erMemo").value.trim(),
+        noCredit: $("#erNoCredit").checked,
         removePhotoIds: [...removeIdx].map(i => r.photoIds[i]),
         addPhotos: POST_STATE.photos
       });
