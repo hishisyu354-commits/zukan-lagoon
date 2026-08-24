@@ -23,13 +23,13 @@
 
 var PROPS = PropertiesService.getScriptProperties();
 
-var VERSION = "v8"; // ping応答に含める。フロント/Claudeが反映確認に使う
+var VERSION = "v9"; // ping応答に含める。フロント/Claudeが反映確認に使う
 
 // リアクションの許可セット(フロントのRX_SETと一致させる)
 var REACTIONS = ["👍", "❤️", "🤩", "📸", "🤿"];
 
 var SHEET_DEFS = {
-  fish:     ["id", "name", "rarity", "description", "knownPointIds", "seasons", "createdByName", "createdByToken", "createdAt"],
+  fish:     ["id", "name", "rarity", "description", "knownPointIds", "seasons", "createdByName", "createdByToken", "createdAt", "pinnedPhotoId"],
   records:  ["id", "fishId", "pointId", "date", "depth", "memo", "photoIds", "userName", "token", "createdAt", "credit"],
   comments: ["id", "targetType", "targetId", "text", "userName", "token", "createdAt"],
   points:   ["id", "area", "subarea", "name", "lat", "lng"],
@@ -240,6 +240,7 @@ function doGet(e) {
     return { id: f.id, name: f.name, rarity: Number(f.rarity) || 0, description: f.description,
              knownPointIds: String(f.knownPointIds || "").split(",").filter(String),
              seasons: String(f.seasons || "").split(",").filter(String),
+             pinnedPhotoId: String(f.pinnedPhotoId || ""),
              by: f.createdByName, createdAt: f.createdAt };
   });
   var records = readAll_("records").map(function (r) {
@@ -345,6 +346,7 @@ function doPost(e) {
     if (req.action === "deleteComment") return deleteComment_(req, auth, me.status === "owner");
     if (req.action === "addPoint")   return addPoint_(req, auth);
     if (req.action === "toggleReaction") return toggleReaction_(req, auth);
+    if (req.action === "pinPhoto")   return pinPhoto_(req, auth);
     if (req.action === "addLog")     return addLog_(req, auth);
     if (req.action === "editLog")    return editLog_(req, auth, me.status === "owner");
     if (req.action === "editFish")   return editFish_(req, auth);
@@ -472,6 +474,22 @@ function deleteComment_(req, auth, isOwner) {
     }
   }
   return json_({ ok: false, code: "notfound" });
+}
+
+// 代表写真のピン留め(メンバー全員可・魚情報の共同編集と同方針)。photoId空で解除
+function pinPhoto_(req, auth) {
+  var f = getRowById_("fish", String(req.fishId || ""));
+  if (!f) return json_({ ok: false, code: "notfound" });
+  var pid = String(req.photoId || "");
+  if (pid) {
+    var owns = readAll_("records").some(function (r) {
+      return String(r.fishId) === String(f.id) && String(r.photoIds || "").split(",").indexOf(pid) >= 0;
+    });
+    if (!owns) return json_({ ok: false, code: "validation", message: "この魚の写真ではありません" });
+  }
+  ensureColumns_("fish");
+  updateRowById_("fish", f.id, { pinnedPhotoId: pid });
+  return json_({ ok: true });
 }
 
 /* ---------------- ログAPI ---------------- */

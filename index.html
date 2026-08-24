@@ -158,6 +158,9 @@ select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid va
 .pslide{flex:0 0 100%;scroll-snap-align:center;position:relative}
 .pcredit{position:absolute;left:10px;bottom:10px;background:rgba(18,64,78,.62);color:#fff;font:600 10.5px var(--mono);padding:4px 9px;border-radius:7px}
 .pcount{position:absolute;top:10px;right:10px;background:rgba(18,64,78,.62);color:#fff;font:700 11px var(--mono);padding:4px 9px;border-radius:7px;z-index:2;pointer-events:none}
+.pinbtn{position:absolute;right:10px;bottom:10px;background:rgba(18,64,78,.62);color:#fff;border:none;border-radius:7px;font:600 10.5px var(--sans);padding:5px 10px;cursor:pointer}
+.pinbtn.on{background:var(--aqua)}
+.pinbtn:disabled{opacity:.6}
 .editlink{font:600 11.5px var(--sans);color:var(--aqua-deep);border:1px solid var(--line);border-radius:7px;padding:4px 10px;background:var(--surface);cursor:pointer;white-space:nowrap}
 /* リアクション */
 .rxbar{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 2px}
@@ -389,8 +392,13 @@ function derive(f) {
     seasons[m >= 3 && m <= 5 ? 0 : m >= 6 && m <= 8 ? 1 : m >= 9 && m <= 11 ? 2 : 3]++;
   });
   // 写真は「誰が撮ったか」を持たせ、全投稿者分を新しい順に並べる(代表1枚に絞らない=公平性)
-  // noCreditの記録は撮影者名を伏せる(日付のみ表示)
+  // noCreditの記録は「撮影者なし」表記。ピン留めされた写真があれば先頭に出す
   const photos = recs.flatMap(r => (r.photoIds || []).map(pid => ({ id: pid, by: r.noCredit ? "" : r.by, date: r.date })));
+  const pin = String(f.pinnedPhotoId || "");
+  if (pin) {
+    const i = photos.findIndex(p => String(p.id) === pin);
+    if (i > 0) photos.unshift(photos.splice(i, 1)[0]);
+  }
   return { recs, sites, depth, seasons, photos };
 }
 
@@ -451,6 +459,12 @@ const LocalStore = {
     if (i < 0) throw { code: "notfound" };
     DB.comments.splice(i, 1); this.save();
   },
+  async pinPhoto(p) {
+    const f = DB.fish.find(x => String(x.id) === String(p.fishId));
+    if (!f) throw { code: "notfound" };
+    f.pinnedPhotoId = p.photoId || "";
+    this.save();
+  },
   async editFish(p) {
     const f = DB.fish.find(x => String(x.id) === String(p.fishId));
     if (!f) throw { code: "notfound" };
@@ -506,7 +520,7 @@ const RemoteStore = {
     const j = await res.json();
     if (!j.ok) throw new Error("load failed");
     j.records.forEach(r => { r.photoIds = r.photoIds || []; });
-    j.fish.forEach(f => { f.knownPointIds = f.knownPointIds || []; f.seasons = f.seasons || []; });
+    j.fish.forEach(f => { f.knownPointIds = f.knownPointIds || []; f.seasons = f.seasons || []; f.pinnedPhotoId = f.pinnedPhotoId || ""; });
     j.points = mergePoints(j.points);
     j.reactions = j.reactions || [];
     j.logs = j.logs || [];
@@ -529,6 +543,7 @@ const RemoteStore = {
   },
   async addComment(p) { return this.post("addComment", p); },
   async deleteComment(p) { return this.post("deleteComment", p); },
+  async pinPhoto(p) { return this.post("pinPhoto", p); },
   async editFish(p) { return this.post("editFish", p); },
   async editRecord(p) {
     const payload = { recordId: p.recordId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo,
@@ -751,14 +766,19 @@ function viewFish(id) {
   const cms = fishComments(f.id);
   const maxSeason = Math.max(1, ...d.seasons);
   const seasonNames = ["春", "夏", "秋", "冬"];
-  const meName = AUTH.name || myName();
-  const canEditRec = (r) => AUTH.status === "owner" || (!!meName && r.by === meName);
+  const meN = meName(); // 注意: グローバルのmeName関数を変数名で隠さない(隠すとコメント欄のmeName()呼び出しが落ちる)
+  const canEditRec = (r) => AUTH.status === "owner" || (!!meN && r.by === meN);
   return `
   <span class="back" onclick="history.back()">← 図鑑へ戻る</span>
   <div class="hero">
     ${d.photos.length ? `
     <div class="pswipe" id="pswipe">
-      ${d.photos.map(p => `<div class="pslide"><div class="ph"><img src="${esc(photoSrc(p.id, 1400))}" loading="lazy" alt=""></div>${(p.by || p.date) ? `<span class="pcredit">${p.by ? "撮影: " + esc(p.by) + (p.date ? " ・ " : "") : ""}${esc(p.date || "")}</span>` : ""}</div>`).join("")}
+      ${d.photos.map(p => {
+        const pinned = String(f.pinnedPhotoId || "") === String(p.id);
+        return `<div class="pslide"><div class="ph"><img src="${esc(photoSrc(p.id, 1400))}" loading="lazy" alt=""></div>
+        <span class="pcredit">${p.by ? "撮影: " + esc(p.by) : "撮影者なし"}${p.date ? " ・ " + esc(p.date) : ""}</span>
+        <button type="button" class="pinbtn${pinned ? " on" : ""}" data-pin="${esc(p.id)}" data-pinned="${pinned ? 1 : 0}">${pinned ? "代表 ✓" : "代表にする"}</button></div>`;
+      }).join("")}
     </div>
     ${d.photos.length > 1 ? `<span class="pcount" id="pcount">1/${d.photos.length}</span>` : ""}`
     : `<div class="ph">${FISH_SVG}</div>`}
@@ -808,7 +828,7 @@ function viewFish(id) {
     </div>`).join("") || `<div class="empty">まだ記録がありません</div>`}
   <div class="h2">コメント ${cms.length}件</div>
   ${cms.map(c => {
-    const canDel = AUTH.status === "owner" || (!!meName() && c.by === meName());
+    const canDel = AUTH.status === "owner" || (!!meN && c.by === meN);
     return `<div class="cmt">
     <div class="cmttop"><span class="cby">${esc(c.by || "?")}</span>${canDel ? `<button class="cmtdel" data-delcmt="${esc(c.id)}">削除</button>` : ""}</div>
     <div class="ctext">${esc(c.text)}</div>
@@ -1176,6 +1196,20 @@ function bindFish(id) {
   if (efb) efb.addEventListener("click", () => { location.hash = "#/editfish/" + encodeURIComponent(id); });
   document.querySelectorAll("[data-openlog]").forEach(b => b.addEventListener("click", () => {
     location.hash = "#/log/" + encodeURIComponent(b.dataset.openlog);
+  }));
+  document.querySelectorAll("[data-pin]").forEach(b => b.addEventListener("click", async () => {
+    if (b.disabled) return;
+    b.disabled = true;
+    try {
+      const unpin = b.dataset.pinned === "1";
+      await Store.pinPhoto({ fishId: id, photoId: unpin ? "" : b.dataset.pin });
+      if (MODE === "live") await reload();
+      route();
+      toast(unpin ? "代表を解除しました" : "代表写真にしました");
+    } catch (e) {
+      b.disabled = false;
+      handleApiError(e);
+    }
   }));
   document.querySelectorAll("[data-editrec]").forEach(b => b.addEventListener("click", () => {
     location.hash = "#/editrec/" + encodeURIComponent(b.dataset.editrec);
