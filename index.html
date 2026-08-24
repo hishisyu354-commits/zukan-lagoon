@@ -392,8 +392,8 @@ function derive(f) {
     seasons[m >= 3 && m <= 5 ? 0 : m >= 6 && m <= 8 ? 1 : m >= 9 && m <= 11 ? 2 : 3]++;
   });
   // 写真は「誰が撮ったか」を持たせ、全投稿者分を新しい順に並べる(代表1枚に絞らない=公平性)
-  // noCreditの記録は「撮影者なし」表記。ピン留めされた写真があれば先頭に出す
-  const photos = recs.flatMap(r => (r.photoIds || []).map(pid => ({ id: pid, by: r.noCredit ? "" : r.by, date: r.date })));
+  // クレジットの優先: 撮影者なし指定 > 撮影者名(別人の写真の代行アップ等) > 登録者名
+  const photos = recs.flatMap(r => (r.photoIds || []).map(pid => ({ id: pid, by: r.noCredit ? "" : (r.photographer || r.by), date: r.date })));
   const pin = String(f.pinnedPhotoId || "");
   if (pin) {
     const i = photos.findIndex(p => String(p.id) === pin);
@@ -450,7 +450,7 @@ const LocalStore = {
   async addRecord(p) {
     let fishId = p.fishId;
     if (p.newFish) fishId = await this.addFish(p.newFish);
-    DB.records.push({ id: uid(), fishId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo || "", noCredit: !!p.noCredit, photoIds: (p.photos || []).map(x => x.dataUrl), by: myName(), createdAt: todayStr() });
+    DB.records.push({ id: uid(), fishId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo || "", noCredit: !!p.noCredit, photographer: p.photographer || "", photoIds: (p.photos || []).map(x => x.dataUrl), by: myName(), createdAt: todayStr() });
     this.save(); return fishId;
   },
   async addComment(p) { DB.comments.push({ id: uid(), targetType: p.targetType, targetId: p.targetId, text: p.text, by: myName(), createdAt: todayStr() }); this.save(); },
@@ -479,6 +479,7 @@ const LocalStore = {
     const remove = new Set(p.removePhotoIds || []);
     r.pointId = p.pointId; r.date = p.date; r.depth = p.depth; r.memo = p.memo || "";
     r.noCredit = !!p.noCredit;
+    r.photographer = p.photographer || "";
     r.photoIds = (r.photoIds || []).filter(x => !remove.has(x)).concat((p.addPhotos || []).map(x => x.dataUrl));
     this.save();
   },
@@ -538,7 +539,7 @@ const RemoteStore = {
   },
   async addFish(p) { return (await this.post("addFish", p)).id; },
   async addRecord(p) {
-    const payload = { fishId: p.fishId, newFish: p.newFish, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo, noCredit: !!p.noCredit, photos: (p.photos || []).map(x => ({ b64: x.b64, mime: x.mime })) };
+    const payload = { fishId: p.fishId, newFish: p.newFish, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo, noCredit: !!p.noCredit, photographer: p.photographer || "", photos: (p.photos || []).map(x => ({ b64: x.b64, mime: x.mime })) };
     return (await this.post("addRecord", payload)).fishId;
   },
   async addComment(p) { return this.post("addComment", p); },
@@ -547,7 +548,7 @@ const RemoteStore = {
   async editFish(p) { return this.post("editFish", p); },
   async editRecord(p) {
     const payload = { recordId: p.recordId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo,
-      noCredit: !!p.noCredit,
+      noCredit: !!p.noCredit, photographer: p.photographer || "",
       removePhotoIds: p.removePhotoIds || [], addPhotos: (p.addPhotos || []).map(x => ({ b64: x.b64, mime: x.mime })) };
     return this.post("editRecord", payload);
   },
@@ -817,7 +818,7 @@ function viewFish(id) {
       <div class="rthumb">${(r.photoIds && r.photoIds[0]) ? `<img src="${esc(photoSrc(r.photoIds[0], 300))}" loading="lazy" alt="">` : FISH_SVG}</div>
       <div class="rmain">
         <div class="rtop"><span class="rpoint">${esc(pointName(r.pointId))}</span><span class="rdate">${esc(r.date)}</span></div>
-        <div class="rmeta">${r.depth ? esc(r.depth) + "m ・ " : ""}${esc(r.by || "?")}</div>
+        <div class="rmeta">${r.depth ? esc(r.depth) + "m ・ " : ""}${esc(r.by || "?")}${(r.photographer && r.photographer !== r.by && !r.noCredit) ? " ・ 撮影: " + esc(r.photographer) : ""}</div>
         ${r.memo ? `<div class="rmemo">${esc(r.memo)}</div>` : ""}
         ${rxBoxHtml("record", r.id, true)}
         <div style="margin-top:7px;display:flex;gap:6px">
@@ -884,6 +885,7 @@ function viewPost(fishId) {
       <div class="previews" id="previews"></div>
       <button type="button" class="filebtn" id="fileBtn">写真を選ぶ</button>
       <input type="file" id="fileIn" accept="image/*" multiple style="display:none">
+      <input class="finput" id="photogIn" maxlength="60" placeholder="撮影者名(空欄なら自分)" style="margin-top:8px">
       <label class="chk"><input type="checkbox" id="noCredit"> 撮影者名を写真に表示しない</label>
     </div>
     <button class="submit" id="submitBtn">記録を保存する</button>
@@ -1307,6 +1309,7 @@ function bindPost(fishId) {
       depth: $("#depthIn").value,
       memo: $("#memoIn").value.trim(),
       noCredit: $("#noCredit").checked,
+      photographer: $("#photogIn").value.trim(),
       photos: POST_STATE.photos
     };
     const np2A = $("#np2Area").value.trim(), np2N = $("#np2Name").value.trim();
@@ -1607,6 +1610,7 @@ function viewEditRecord(id) {
       <div class="previews" id="previews"></div>
       <button type="button" class="filebtn" id="fileBtn">写真を選ぶ</button>
       <input type="file" id="fileIn" accept="image/*" multiple style="display:none">
+      <input class="finput" id="erPhotog" maxlength="60" placeholder="撮影者名(空欄なら自分)" value="${esc(r.photographer || "")}" style="margin-top:8px">
       <label class="chk"><input type="checkbox" id="erNoCredit" ${r.noCredit ? "checked" : ""}> 撮影者名を写真に表示しない</label>
     </div>
     <button class="submit" id="erSave">保存する</button>
@@ -1652,6 +1656,7 @@ function bindEditRecord(id) {
         recordId: id, pointId: resolvedPointId, date,
         depth: $("#erDepth").value, memo: $("#erMemo").value.trim(),
         noCredit: $("#erNoCredit").checked,
+        photographer: $("#erPhotog").value.trim(),
         removePhotoIds: [...removeIdx].map(i => r.photoIds[i]),
         addPhotos: POST_STATE.photos
       });

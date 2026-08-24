@@ -23,14 +23,14 @@
 
 var PROPS = PropertiesService.getScriptProperties();
 
-var VERSION = "v9"; // ping応答に含める。フロント/Claudeが反映確認に使う
+var VERSION = "v10"; // ping応答に含める。フロント/Claudeが反映確認に使う
 
 // リアクションの許可セット(フロントのRX_SETと一致させる)
 var REACTIONS = ["👍", "❤️", "🤩", "📸", "🤿"];
 
 var SHEET_DEFS = {
   fish:     ["id", "name", "rarity", "description", "knownPointIds", "seasons", "createdByName", "createdByToken", "createdAt", "pinnedPhotoId"],
-  records:  ["id", "fishId", "pointId", "date", "depth", "memo", "photoIds", "userName", "token", "createdAt", "credit"],
+  records:  ["id", "fishId", "pointId", "date", "depth", "memo", "photoIds", "userName", "token", "createdAt", "credit", "photographer"],
   comments: ["id", "targetType", "targetId", "text", "userName", "token", "createdAt"],
   points:   ["id", "area", "subarea", "name", "lat", "lng"],
   members:  ["token", "displayName", "status", "requestedAt", "updatedAt"],
@@ -246,7 +246,8 @@ function doGet(e) {
   var records = readAll_("records").map(function (r) {
     return { id: r.id, fishId: r.fishId, pointId: r.pointId, date: fmtDate_(r.date), depth: r.depth, memo: r.memo,
              photoIds: String(r.photoIds || "").split(",").filter(String), by: r.userName,
-             noCredit: String(r.credit || "") === "none", createdAt: r.createdAt };
+             noCredit: String(r.credit || "") === "none",
+             photographer: String(r.photographer || ""), createdAt: r.createdAt };
   });
   var comments = readAll_("comments").map(function (c) {
     return { id: c.id, targetType: c.targetType, targetId: c.targetId, text: c.text, by: c.userName, createdAt: c.createdAt };
@@ -394,7 +395,8 @@ function addRecord_(req, auth) {
     memo: clip_(req.memo, LIMITS.maxTextLen),
     photoIds: photoIds.join(","),
     userName: auth.name, token: auth.token, createdAt: now_(),
-    credit: req.noCredit ? "none" : ""
+    credit: req.noCredit ? "none" : "",
+    photographer: clip_(String(req.photographer || "").trim(), 60)
   });
   return json_({ ok: true, id: id, fishId: fishId, photoIds: photoIds });
 }
@@ -582,7 +584,8 @@ function editRecord_(req, auth, isOwner) {
     depth: clip_(req.depth, 10),
     memo: clip_(req.memo, LIMITS.maxTextLen),
     photoIds: keep.join(","),
-    credit: req.noCredit ? "none" : ""
+    credit: req.noCredit ? "none" : "",
+    photographer: clip_(String(req.photographer || "").trim(), 60)
   });
   return json_({ ok: true, photoIds: keep });
 }
