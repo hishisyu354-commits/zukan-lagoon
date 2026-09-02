@@ -23,19 +23,19 @@
 
 var PROPS = PropertiesService.getScriptProperties();
 
-var VERSION = "v10"; // ping応答に含める。フロント/Claudeが反映確認に使う
+var VERSION = "v11"; // ping応答に含める。フロント/Claudeが反映確認に使う
 
 // リアクションの許可セット(フロントのRX_SETと一致させる)
 var REACTIONS = ["👍", "❤️", "🤩", "📸", "🤿"];
 
 var SHEET_DEFS = {
   fish:     ["id", "name", "rarity", "description", "knownPointIds", "seasons", "createdByName", "createdByToken", "createdAt", "pinnedPhotoId"],
-  records:  ["id", "fishId", "pointId", "date", "depth", "memo", "photoIds", "userName", "token", "createdAt", "credit", "photographer"],
+  records:  ["id", "fishId", "pointId", "date", "depth", "memo", "photoIds", "userName", "token", "createdAt", "credit", "photographer", "clientKey"],
   comments: ["id", "targetType", "targetId", "text", "userName", "token", "createdAt"],
   points:   ["id", "area", "subarea", "name", "lat", "lng"],
   members:  ["token", "displayName", "status", "requestedAt", "updatedAt"],
   reactions: ["id", "targetType", "targetId", "emoji", "userName", "token", "createdAt"],
-  logs: ["id", "diveNo", "date", "pointId", "duration", "maxDepth", "waterTemp", "visibility", "weather", "buddy", "memo", "userName", "token", "createdAt"]
+  logs: ["id", "diveNo", "date", "pointId", "duration", "maxDepth", "waterTemp", "visibility", "weather", "buddy", "memo", "userName", "token", "createdAt", "clientKey"]
 };
 
 // 初期ポイント(新規setup時のみ使用)。階層=エリア>サブエリア>ポイント。緯度経度はおおよそ。
@@ -345,6 +345,8 @@ function doPost(e) {
     if (req.action === "addRecord")  return addRecord_(req, auth);
     if (req.action === "addComment") return addComment_(req, auth);
     if (req.action === "deleteComment") return deleteComment_(req, auth, me.status === "owner");
+    if (req.action === "deleteFish")   return deleteFish_(req, auth, me.status === "owner");
+    if (req.action === "deleteRecord") return deleteRecord_(req, auth, me.status === "owner");
     if (req.action === "addPoint")   return addPoint_(req, auth);
     if (req.action === "toggleReaction") return toggleReaction_(req, auth);
     if (req.action === "pinPhoto")   return pinPhoto_(req, auth);
@@ -359,9 +361,20 @@ function doPost(e) {
 }
 
 function addFish_(req, auth) {
-  var name = clip_(req.name, LIMITS.maxNameLen);
+  var name = clip_(String(req.name || "").trim(), LIMITS.maxNameLen);
   var rarity = Math.max(1, Math.min(5, Number(req.rarity) || 1));
   if (!name) return json_({ ok: false, code: "validation", message: "名前は必須" });
+  // 同名の魚は自動統合: 新規行を作らず既存に合流(ラグ再送・別の人の同種登録の両方に効く)
+  var existing = readAll_("fish").filter(function (f) { return String(f.name).trim() === name; })[0];
+  if (existing) {
+    var kp = normalizePointIds_(req.knownPointIds);
+    if (kp) {
+      var cur = String(existing.knownPointIds || "").split(",").filter(String);
+      ensureColumns_("fish");
+      updateRowById_("fish", existing.id, { knownPointIds: normalizePointIds_(cur.concat(kp.split(","))) });
+    }
+    return json_({ ok: true, id: existing.id, merged: true });
+  }
   ensureColumns_("fish");
   var id = Utilities.getUuid();
   appendRow_("fish", {
@@ -375,6 +388,15 @@ function addFish_(req, auth) {
 }
 
 function addRecord_(req, auth) {
+  // 同じ送信の再送(ラグでのリトライ)は保存済みの結果を返す=二重登録しない
+  var ck = String(req.clientKey || "");
+  if (ck) {
+    var dup = readAll_("records").filter(function (r) { return String(r.clientKey || "") === ck; })[0];
+    if (dup) {
+      return json_({ ok: true, id: dup.id, fishId: dup.fishId,
+                     photoIds: String(dup.photoIds || "").split(",").filter(String), dedup: true });
+    }
+  }
   var fishId = String(req.fishId || "");
   if (req.newFish) {
     var created = JSON.parse(addFish_(req.newFish, auth).getContent());
@@ -396,7 +418,8 @@ function addRecord_(req, auth) {
     photoIds: photoIds.join(","),
     userName: auth.name, token: auth.token, createdAt: now_(),
     credit: req.noCredit ? "none" : "",
-    photographer: clip_(String(req.photographer || "").trim(), 60)
+    photographer: clip_(String(req.photographer || "").trim(), 60),
+    clientKey: clip_(ck, 64)
   });
   return json_({ ok: true, id: id, fishId: fishId, photoIds: photoIds });
 }
@@ -494,6 +517,82 @@ function pinPhoto_(req, auth) {
   return json_({ ok: true });
 }
 
+/* ---------------- 削除API(魚・記録) ---------------- */
+
+// 条件に合う行を全部消す(下から消して行番号ズレを防ぐ)
+function deleteRowsWhere_(name, pred) {
+  var sh = ss_().getSheetByName(name);
+  if (!sh) return 0;
+  var vals = sh.getDataRange().getValues();
+  var head = vals[0].map(String);
+  var toDel = [];
+  for (var i = 1; i < vals.length; i++) {
+    var o = {};
+    head.forEach(function (h, j) { o[h] = vals[i][j]; });
+    if (pred(o)) toDel.push(i + 1);
+  }
+  for (var k = toDel.length - 1; k >= 0; k--) sh.deleteRow(toDel[k]);
+  return toDel.length;
+}
+
+function trashPhotos_(photoIdsCsvList) {
+  photoIdsCsvList.forEach(function (csv) {
+    String(csv || "").split(",").filter(String).forEach(function (pid) {
+      try { DriveApp.getFileById(pid).setTrashed(true); } catch (e) { /* 既に無い等は無視 */ }
+    });
+  });
+}
+
+// 魚の削除: 登録者本人かオーナー。本人の場合は他人の記録/コメントが付いていたら拒否(データ保護)。
+// 消えるもの: 魚・その記録(写真はDriveゴミ箱)・魚と記録へのコメント・リアクション
+function deleteFish_(req, auth, isOwner) {
+  var f = getRowById_("fish", String(req.fishId || ""));
+  if (!f) return json_({ ok: false, code: "notfound" });
+  if (String(f.createdByToken) !== auth.token && !isOwner) {
+    return json_({ ok: false, code: "forbidden", message: "登録した本人だけ削除できます" });
+  }
+  var recs = readAll_("records").filter(function (r) { return String(r.fishId) === String(f.id); });
+  var recIds = {};
+  recs.forEach(function (r) { recIds[String(r.id)] = true; });
+  if (!isOwner) {
+    var othersRec = recs.some(function (r) { return String(r.token) !== auth.token; });
+    var othersCmt = readAll_("comments").some(function (c) {
+      var onThis = (c.targetType === "fish" && String(c.targetId) === String(f.id)) ||
+                   (c.targetType === "record" && recIds[String(c.targetId)]);
+      return onThis && String(c.token) !== auth.token;
+    });
+    if (othersRec || othersCmt) {
+      return json_({ ok: false, code: "forbidden", message: "他のメンバーの記録やコメントが付いているため削除できません(オーナーに依頼してください)" });
+    }
+  }
+  trashPhotos_(recs.map(function (r) { return r.photoIds; }));
+  deleteRowsWhere_("comments", function (c) {
+    return (c.targetType === "fish" && String(c.targetId) === String(f.id)) ||
+           (c.targetType === "record" && recIds[String(c.targetId)]);
+  });
+  deleteRowsWhere_("reactions", function (x) {
+    return (x.targetType === "fish" && String(x.targetId) === String(f.id)) ||
+           (x.targetType === "record" && recIds[String(x.targetId)]);
+  });
+  deleteRowsWhere_("records", function (r) { return String(r.fishId) === String(f.id); });
+  deleteRowsWhere_("fish", function (x) { return String(x.id) === String(f.id); });
+  return json_({ ok: true, removedRecords: recs.length });
+}
+
+// 記録の削除: 投稿した本人かオーナー。写真はDriveゴミ箱、その記録へのコメント/リアクションも消す
+function deleteRecord_(req, auth, isOwner) {
+  var r = getRowById_("records", String(req.recordId || ""));
+  if (!r) return json_({ ok: false, code: "notfound" });
+  if (String(r.token) !== auth.token && !isOwner) {
+    return json_({ ok: false, code: "forbidden", message: "自分の記録だけ削除できます" });
+  }
+  trashPhotos_([r.photoIds]);
+  deleteRowsWhere_("comments", function (c) { return c.targetType === "record" && String(c.targetId) === String(r.id); });
+  deleteRowsWhere_("reactions", function (x) { return x.targetType === "record" && String(x.targetId) === String(r.id); });
+  deleteRowsWhere_("records", function (x) { return String(x.id) === String(r.id); });
+  return json_({ ok: true });
+}
+
 /* ---------------- ログAPI ---------------- */
 
 function logFields_(req) {
@@ -512,11 +611,17 @@ function logFields_(req) {
 }
 
 function addLog_(req, auth) {
+  var ck = String(req.clientKey || "");
+  if (ck) {
+    var dup = readAll_("logs").filter(function (l) { return String(l.clientKey || "") === ck; })[0];
+    if (dup) return json_({ ok: true, id: dup.id, dedup: true });
+  }
   var f = logFields_(req);
   if (!f.date) return json_({ ok: false, code: "validation", message: "日付は必須" });
   if (!f.pointId) return json_({ ok: false, code: "validation", message: "ポイントは必須" });
   var id = Utilities.getUuid();
   f.id = id; f.userName = auth.name; f.token = auth.token; f.createdAt = now_();
+  f.clientKey = clip_(ck, 64);
   appendRow_("logs", f);
   return json_({ ok: true, id: id });
 }

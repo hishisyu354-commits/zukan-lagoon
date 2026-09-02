@@ -131,6 +131,8 @@ select.pointsel{flex:1;min-width:0;background:var(--surface);border:1px solid va
 .filebtn{font:600 13px var(--sans);color:var(--dim);border:1px dashed #b9d8de;border-radius:9px;padding:12px;background:transparent;cursor:pointer;text-align:center}
 .submit{font:700 14.5px var(--sans);color:#fff;background:var(--aqua);border:none;border-radius:11px;padding:14px;cursor:pointer;margin-top:4px;box-shadow:var(--shadow)}
 .submit:disabled{opacity:.5}
+.dangerbtn{font:600 12.5px var(--sans);color:var(--danger);background:var(--surface);border:1px solid #f2cfc9;border-radius:9px;padding:11px;cursor:pointer;margin-top:2px}
+.dangerbtn:disabled{opacity:.5}
 .notice{font-size:12.5px;line-height:1.65;color:#6b5636;background:#fdf3e7;border:1px solid #f0dcc0;border-left:3px solid var(--warn);border-radius:9px;padding:11px 13px}
 
 /* admin */
@@ -465,6 +467,22 @@ const LocalStore = {
     f.pinnedPhotoId = p.photoId || "";
     this.save();
   },
+  async deleteFish(p) {
+    const fid = String(p.fishId);
+    const recIds = new Set(DB.records.filter(r => String(r.fishId) === fid).map(r => String(r.id)));
+    DB.records = DB.records.filter(r => String(r.fishId) !== fid);
+    DB.comments = DB.comments.filter(c => !((c.targetType === "fish" && String(c.targetId) === fid) || (c.targetType === "record" && recIds.has(String(c.targetId)))));
+    DB.reactions = DB.reactions.filter(x => !((x.targetType === "fish" && String(x.targetId) === fid) || (x.targetType === "record" && recIds.has(String(x.targetId)))));
+    DB.fish = DB.fish.filter(f => String(f.id) !== fid);
+    this.save();
+  },
+  async deleteRecord(p) {
+    const rid = String(p.recordId);
+    DB.records = DB.records.filter(r => String(r.id) !== rid);
+    DB.comments = DB.comments.filter(c => !(c.targetType === "record" && String(c.targetId) === rid));
+    DB.reactions = DB.reactions.filter(x => !(x.targetType === "record" && String(x.targetId) === rid));
+    this.save();
+  },
   async editFish(p) {
     const f = DB.fish.find(x => String(x.id) === String(p.fishId));
     if (!f) throw { code: "notfound" };
@@ -539,12 +557,14 @@ const RemoteStore = {
   },
   async addFish(p) { return (await this.post("addFish", p)).id; },
   async addRecord(p) {
-    const payload = { fishId: p.fishId, newFish: p.newFish, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo, noCredit: !!p.noCredit, photographer: p.photographer || "", photos: (p.photos || []).map(x => ({ b64: x.b64, mime: x.mime })) };
+    const payload = { fishId: p.fishId, newFish: p.newFish, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo, noCredit: !!p.noCredit, photographer: p.photographer || "", clientKey: p.clientKey || "", photos: (p.photos || []).map(x => ({ b64: x.b64, mime: x.mime })) };
     return (await this.post("addRecord", payload)).fishId;
   },
   async addComment(p) { return this.post("addComment", p); },
   async deleteComment(p) { return this.post("deleteComment", p); },
   async pinPhoto(p) { return this.post("pinPhoto", p); },
+  async deleteFish(p) { return this.post("deleteFish", p); },
+  async deleteRecord(p) { return this.post("deleteRecord", p); },
   async editFish(p) { return this.post("editFish", p); },
   async editRecord(p) {
     const payload = { recordId: p.recordId, pointId: p.pointId, date: p.date, depth: p.depth, memo: p.memo,
@@ -1254,6 +1274,8 @@ function bindFish(id) {
 }
 
 function bindPost(fishId) {
+  // 送信の合鍵: ラグで失敗に見えて再タップしても、サーバー側で同じ送信と判定され二重登録されない
+  const clientKey = uid();
   const segOld = $("#segOld"), segNew = $("#segNew");
   const setSeg = (isNew) => {
     POST_STATE.newFish = isNew;
@@ -1310,6 +1332,7 @@ function bindPost(fishId) {
       memo: $("#memoIn").value.trim(),
       noCredit: $("#noCredit").checked,
       photographer: $("#photogIn").value.trim(),
+      clientKey,
       photos: POST_STATE.photos
     };
     const np2A = $("#np2Area").value.trim(), np2N = $("#np2Name").value.trim();
@@ -1502,6 +1525,7 @@ function viewLogForm(logId) {
 
 function bindLogForm(logId) {
   if (logId && !DB.logs.find(x => String(x.id) === String(logId))) return;
+  const clientKey = logId ? "" : uid(); // 新規保存の再送対策
   bindNewPoint("lgPoint", "lgnp");
   $("#lgSave").addEventListener("click", async () => {
     const nameEl = $("#mockName");
@@ -1518,7 +1542,7 @@ function bindLogForm(logId) {
       const pointId = await resolvePointSel("lgPoint", "lgnp");
       if (!pointId) { btn.disabled = false; btn.textContent = logId ? "保存する" : "ログを保存する"; return; }
       const payload = {
-        logId: logId || undefined, pointId,
+        logId: logId || undefined, pointId, clientKey,
         date: $("#lgDate").value, diveNo: $("#lgNo").value.trim(),
         duration: $("#lgDur").value.trim(), maxDepth: $("#lgDepth").value.trim(),
         waterTemp: $("#lgTemp").value.trim(), visibility: $("#lgVis").value.trim(),
@@ -1559,6 +1583,8 @@ function viewEditFish(id) {
       <div class="fnote" style="font:500 10.5px var(--mono);color:var(--faint)">記録があるポイントは自動で表示されます。ここは「他でも見られる」情報の追加用。</div>
     </div>
     <button class="submit" id="efSave">保存する</button>
+    ${(AUTH.status === "owner" || (!!meName() && f.by === meName())) ? `
+    <button type="button" class="dangerbtn" id="efDelete">この魚を図鑑から削除(記録・写真・コメントごと)</button>` : ""}
   </div>`;
 }
 
@@ -1585,6 +1611,21 @@ function bindEditFish(id) {
       toast("保存しました");
       location.hash = "#/fish/" + encodeURIComponent(id);
     } catch (e) { handleApiError(e); btn.disabled = false; btn.textContent = "保存する"; }
+  });
+  const del = $("#efDelete");
+  if (del) del.addEventListener("click", async () => {
+    const d = derive(f);
+    if (!confirm(`「${f.name}」を図鑑から削除します。\n記録${d.recs.length}件・写真・コメントも一緒に消えます(写真はDriveのゴミ箱へ)。よろしいですか?`)) return;
+    del.disabled = true;
+    try {
+      await Store.deleteFish({ fishId: id });
+      if (MODE === "live") await reload();
+      toast("削除しました");
+      location.hash = "#/";
+    } catch (e) {
+      del.disabled = false;
+      handleApiError(e);
+    }
   });
 }
 
@@ -1614,6 +1655,7 @@ function viewEditRecord(id) {
       <label class="chk"><input type="checkbox" id="erNoCredit" ${r.noCredit ? "checked" : ""}> 撮影者名を写真に表示しない</label>
     </div>
     <button class="submit" id="erSave">保存する</button>
+    <button type="button" class="dangerbtn" id="erDelete">この記録を削除(写真ごと)</button>
   </div>`;
 }
 
@@ -1664,6 +1706,20 @@ function bindEditRecord(id) {
       toast("保存しました");
       location.hash = "#/fish/" + encodeURIComponent(r.fishId);
     } catch (e) { handleApiError(e); btn.disabled = false; btn.textContent = "保存する"; }
+  });
+  $("#erDelete").addEventListener("click", async () => {
+    if (!confirm("この記録を削除します。写真はDriveのゴミ箱に移動します。よろしいですか?")) return;
+    const del = $("#erDelete");
+    del.disabled = true;
+    try {
+      await Store.deleteRecord({ recordId: id });
+      if (MODE === "live") await reload();
+      toast("記録を削除しました");
+      location.hash = "#/fish/" + encodeURIComponent(r.fishId);
+    } catch (e) {
+      del.disabled = false;
+      handleApiError(e);
+    }
   });
 }
 
